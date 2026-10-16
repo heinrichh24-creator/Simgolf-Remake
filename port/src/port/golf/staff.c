@@ -107,7 +107,7 @@ int staff_preflight(int fd, int course, int offset) {
   if (ok) ok = fread(head, 4, 1, f) == 1;
   if (ok && !memcmp(head, "SGMP", 4)) {
     ok = fread(head + 1, 12, 1, f) == 1;
-    if (ok) { w = (int)head[2]; h = (int)head[3]; ok = head[1] == 1 && w >= 50 && h >= 50 && w <= GRID_MAX_SIDE && h <= GRID_MAX_SIDE; }
+    if (ok) { w = (int)head[2]; h = (int)head[3]; ok = head[1] == 1 && grid_dimensions_supported(w, h); }
   } else if (ok) ok = fseek(f, -4, SEEK_CUR) == 0;
   StaffTag t; unsigned char extra[sizeof staged]; memset(extra, 0, sizeof extra);
   if (ok) ok = fread(t.magic, 4, 1, f) == 1;
