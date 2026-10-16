@@ -423,6 +423,8 @@ static void row_tray(UiCtx *c, const char *title, const char *const *tabs, int n
 
 static void stock_tray(UiCtx *c, const char *title, const char *const *tabs, int ntabs, int *tab, Tile *tiles, int n,
                        int undo_x, int undo_y, Acts *a);
+static void modern_original_tray(UiCtx *c, const char *title, const char *const *tabs, int ntabs, int *tab,
+                                 Tile *tiles, int n, int undo_x, int undo_y, Acts *a);
 static void panel_tray(UiCtx *c, const char *title, const char *const *tabs, int ntabs, int *tab, Tile *tiles, int n,
                        int undo_x, int undo_y, Acts *a);
 static int g_col_mode;      // tray_column: 0 beside the left dock, 1 right edge, 2 above the anchor (left), 3 above it (right)
@@ -437,6 +439,10 @@ static void tray(UiCtx *c, UiHud *hud, const char *title, const char *const *tab
     g_col_anchor = dock_r;
     tray_column(c, title, tabs, ntabs, tab, tiles, n, undo_x, undo_y, dock_r, a);
     g_col_mode = 0;
+    return;
+  }
+  if (hud->density == HUD_MODERN_ORIGINAL) {
+    modern_original_tray(c, title, tabs, ntabs, tab, tiles, n, undo_x, undo_y, a);
     return;
   }
   if (hud->density == HUD_STOCK) {
@@ -968,6 +974,149 @@ static void stock_tray(UiCtx *c, const char *title, const char *const *tabs, int
     else snprintf(tipbuf, sizeof tipbuf, "%s", tiles[i].name);
     int flags = (tiles[i].selected ? UI_SELECTED : 0) | (tiles[i].disabled ? UI_DISABLED : 0);
     if (mini_tile(c, ui_idi(ui_id(title), i + 100), tr, &tiles[i], flags, tipbuf)) act(a, tiles[i].act);
+  }
+}
+
+// ------------------------------------------------------------------ Modern Original: independent, mod-tunable silhouette
+//
+// Measurements below correspond to the player's 788x450 layout reference,
+// NOT the stock wheel's scaled 800x600 positions. The buttons follow the
+// descending diagonal; the bottom tray only appears for an opened category.
+// A mod may override each geometry value through [settings] ui.mo_* without
+// replacing binaries between visual revisions.
+
+static float mo_value(const char *name, float fallback) {
+  return (float)mods_get_num(name, fallback);
+}
+
+static float mo_scale(UiCtx *c) {
+  UiRect scr = ui_screen(c);
+  float mul = mo_value("ui.mo_scale", 1);
+  if (mul < 0.55f) mul = 0.55f;
+  if (mul > 1.5f) mul = 1.5f;
+  return scr.h / 450.0f * mul;
+}
+
+static float mo_x(UiCtx *c, float x) { return ui_screen(c).x + x * mo_scale(c); }
+static float mo_y(UiCtx *c, float y) {
+  UiRect scr = ui_screen(c);
+  return scr.y + scr.h - (450 - y) * mo_scale(c);
+}
+
+static UiRect modern_original_corner(UiCtx *c, UiHud *h, const HudSnap *s, Acts *a) {
+  const UiTokens *t = ui_tokens(c);
+  float k = mo_scale(c);
+  int on = active_item(s);
+  // A translucent quarter-disc rim, not the huge opaque 330-unit stock panel.
+  float outer = mo_value("ui.mo_outer_radius", 176) * k;
+  float inner = mo_value("ui.mo_inner_radius", 150) * k;
+  if (inner < 1 || inner > outer - k * 8) inner = outer - k * 8;
+  UiRect scr = ui_screen(c);
+  float cx = scr.x, cy = scr.y + scr.h;
+  UiRect rim = ui_rect(cx - outer, cy - outer, 2 * outer, 2 * outer);
+  UiRect face = ui_rect(cx - inner, cy - inner, 2 * inner, 2 * inner);
+  uid_rrect(ui_drawer(c), rim, outer, uid_alpha(t->glass_border, 0.6f));
+  uid_rrect(ui_drawer(c), face, inner, uid_alpha(t->glass_fill, 0.55f));
+  uid_rrect_stroke(ui_drawer(c), rim, outer, fmaxf(1, 1.3f * k), uid_alpha(t->glass_highlight, 0.8f));
+
+  static const struct { const char *x, *y, *d; float dx, dy, dd; int item; } circles[] = {
+      {"ui.mo_course_x", "ui.mo_course_y", "ui.mo_course_d", 42, 312, 70, D_COURSE},
+      {"ui.mo_build_x", "ui.mo_build_y", "ui.mo_build_d", 121, 338, 70, D_BUILD},
+      {"ui.mo_people_x", "ui.mo_people_y", "ui.mo_people_d", 177, 406, 70, D_PEOPLE}};
+  uint32_t base = ui_id("hud.modern_original");
+  for (int i = 0; i < 3; i++) {
+    const float x = mo_x(c, mo_value(circles[i].x, circles[i].dx));
+    const float y = mo_y(c, mo_value(circles[i].y, circles[i].dy));
+    const float d = mo_value(circles[i].d, circles[i].dd) * k;
+    int it = circles[i].item;
+    if (ui_round_item(c, ui_idi(base, it), x, y, d, k_dock_ic[it],
+                      it == on && !h->tray_hidden, k_dock_lab[it]))
+      dock_act(h, s, a, it, on);
+    // Retain the 2002 house-on-grid identity without adding a fourth category.
+    if (it == D_BUILD) {
+      float gy = y + d * 0.17f, hw = d * 0.16f;
+      UiColor ink = uid_alpha(t->text_secondary, 0.82f);
+      uid_line(ui_drawer(c), x - hw, gy, x + hw, gy, fmaxf(1.0f, k * 0.8f), ink);
+      uid_line(ui_drawer(c), x - hw, gy + d * 0.09f, x + hw, gy + d * 0.09f, fmaxf(1.0f, k * 0.8f), ink);
+      for (int j = -1; j <= 1; j++)
+        uid_line(ui_drawer(c), x + j * hw, gy, x + j * hw, gy + d * 0.09f, fmaxf(1.0f, k * 0.8f), ink);
+    }
+  }
+  // Secondary buttons are circular and stay inside the old quarter-wheel.
+  static const struct { float x, y; UiIcon icon; int action; const char *tip; } small[] = {
+      {30, 413, UI_ICON_PLUS, W_ZOOMIN, "Zoom in"},
+      {65, 421, UI_ICON_MINUS, W_ZOOMOUT, "Zoom out"},
+      {100, 431, UI_ICON_CHART, W_INFO, "Reports"},
+      {31, 446, UI_ICON_ROTL, W_ROTL, "Rotate left"},
+      {66, 446, UI_ICON_ROTR, W_ROTR, "Rotate right"},
+      {135, 446, UI_ICON_GEAR, W_OPTIONS, "Menu"}};
+  for (int i = 0; i < (int)(sizeof small / sizeof small[0]); i++) {
+    float d = mo_value("ui.mo_small_d", 23) * k;
+    UiRect r = ui_rect(mo_x(c, small[i].x) - d / 2,
+                       mo_y(c, small[i].y) - d / 2, d, d);
+    if (ui_icon_button(c, ui_idi(base, i + 10), r, small[i].icon,
+                       UI_ROUND | UI_COMPACT, small[i].tip))
+      wheel(a, small[i].action);
+  }
+  return ui_rect(scr.x, scr.y + scr.h - outer, outer, outer);
+}
+
+static void modern_original_tray(UiCtx *c, const char *title, const char *const *tabs, int ntabs,
+                                 int *tab, Tile *tiles, int n, int undo_x, int undo_y, Acts *a) {
+  const UiTokens *t = ui_tokens(c);
+  UiRect scr = ui_screen(c);
+  float k = mo_scale(c), pad = 7 * k, hh = 26 * k;
+  float x = mo_x(c, mo_value("ui.mo_tray_x", 216));
+  float h = mo_value("ui.mo_tray_h", 80) * k;
+  if (x > scr.x + scr.w - 2 * h) x = scr.x + scr.w - 2 * h;
+  UiRect panel = ui_rect(x, scr.y + scr.h - h, scr.x + scr.w - x + 10*k, h + 10*k);
+  ui_panel(c, panel, 36 * k, 0);
+  float head_x = panel.x + pad, head_y = panel.y + 4*k;
+  float name_w = ui_text_width(c, UI_TYPE_HEADING, title) + 14*k;
+  ui_text_in(c, ui_rect(head_x, head_y, name_w, hh), UI_TYPE_HEADING, t->text_primary, title, 0);
+  if (ntabs && tab) {
+    float tab_w = ui_segmented_width(c, tabs, NULL, ntabs);
+    UiRect tr = ui_rect(head_x + name_w, head_y, fminf(tab_w, panel.w - name_w - 4*pad), hh);
+    ui_segmented(c, ui_id(title) ^ 0x7ab5u, tr, tabs, NULL, ntabs, tab);
+  }
+  float art_h = h - hh - 11*k, art_w = art_h * 1.12f, gap = 4*k;
+  if (art_h < 12) art_h = 12;
+  float y = panel.y + hh + 6*k, view_x = panel.x + pad;
+  float side = undo_x >= 0 ? 42*k : 0;
+  float vw = panel.w - 2*pad - side;
+  float total = n * (art_w + gap) - gap;
+  int overflowing = total > vw;
+  if (overflowing) vw -= 42*k;
+  UiRect view = ui_rect(view_x, y, fmaxf(art_w, vw), art_h);
+  uint32_t sid = ui_id(title) ^ 0x9ab21u;
+  if (n == 0)
+    ui_text_in(c, view, UI_TYPE_CAPTION, t->text_secondary, "Select a tool or golfer.", 0);
+  else {
+    float offset = ui_scroll_begin(c, sid, view, total);
+    for (int i = 0; i < n; i++) {
+      UiRect r = ui_rect(view.x + offset + i*(art_w+gap), view.y, art_w, art_h);
+      if (r.x + r.w < view.x || r.x > view.x + view.w) continue;
+      char tip[96];
+      if (tiles[i].price && *tiles[i].price)
+        snprintf(tip, sizeof tip, "%s, %s", tiles[i].name, tiles[i].price);
+      else snprintf(tip, sizeof tip, "%s", tiles[i].name);
+      int flags = (tiles[i].selected ? UI_SELECTED : 0) | (tiles[i].disabled ? UI_DISABLED : 0);
+      if (mini_tile(c, ui_idi(ui_id(title), i + 100), r, &tiles[i], flags, tip))
+        act(a, tiles[i].act);
+    }
+    ui_scroll_end(c);
+  }
+  if (overflowing) {
+    float b = 18*k, end = view.x + view.w + 2*k;
+    float oy = view.y + (view.h - b)/2;
+    if (ui_icon_button(c, sid ^ 1, ui_rect(end, oy, b, b), UI_ICON_CHEV, UI_COMPACT, "Scroll tools"))
+      *ui_state(c, sid) -= 3 * (art_w + gap);
+  }
+  if (undo_x >= 0) {
+    float b = 25*k;
+    UiRect ur = ui_rect(panel.x + panel.w - b - 20*k, panel.y + (h-b)/2, b, b);
+    if (ui_icon_button(c, ui_id(title) ^ 0x0d0u, ur, UI_ICON_UNDO, UI_COMPACT, "Undo"))
+      click(a, undo_x, undo_y);
   }
 }
 
@@ -2162,9 +2311,32 @@ int ui_hud_draw(UiCtx *c, UiHud *h, const HudSnap *s, SDL_Texture *const *art, H
     hidden_hint(c, h);
     return 0;
   }
-  if (h->density < 0 || h->density > HUD_JWE) h->density = 0;
+  if (h->density < 0 || h->density > HUD_MODERN_ORIGINAL) h->density = 0;
   g_s = s;
   g_h = h;
+  if (h->density == HUD_MODERN_ORIGINAL) {
+    // All other HUD modes remain untouched. Reuse the readable Mint top
+    // status cluster, but none of its competing bottom dock or camera pill.
+    if (!h->radial_open) { h->tray_hidden = 1; h->radial_open = 1; }
+    int save_density = h->density, save_bottom = h->original_bottom;
+    h->density = HUD_JWE;
+    h->original_bottom = 1;
+    bars(c, h, s, art, &a);
+    h->density = save_density;
+    h->original_bottom = save_bottom;
+    UiRect wheel_r = modern_original_corner(c, h, s, &a);
+    int tray_open = !h->tray_hidden && active_item(s) >= D_COURSE && active_item(s) <= D_PEOPLE;
+    if (tray_open) switch (active_item(s)) {
+      case D_COURSE: course_tray(c, h, s, art, wheel_r, &a); break;
+      case D_BUILD: buildings_tray(c, h, s, art, wheel_r, &a); break;
+      case D_LAND: landscape_tray(c, h, s, art, wheel_r, &a); break;
+      case D_PEOPLE: people_tray(c, h, s, wheel_r, &a); break;
+    }
+    place_panel(c, h, s, art, &a, 0);
+    shot_readout(c, s, 1);
+    news_ui(c, h, s, &a);
+    return a.n;
+  }
   if (h->original_bottom) {
     // Keep only the Frosted Mint top stats, notification centre and shot card.
     // The legacy wheel, trays and mouse handlers are provided by golf itself.
