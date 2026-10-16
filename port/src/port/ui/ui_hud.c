@@ -1053,10 +1053,8 @@ static UiRect modern_original_corner(UiCtx *c, UiHud *h, const HudSnap *s, Acts 
       {135, 446, UI_ICON_GEAR, W_OPTIONS, "Menu"}};
   for (int i = 0; i < (int)(sizeof small / sizeof small[0]); i++) {
     float d = mo_value("ui.mo_small_d", 23) * k;
-    UiRect r = ui_rect(mo_x(c, small[i].x) - d / 2,
-                       mo_y(c, small[i].y) - d / 2, d, d);
-    if (ui_icon_button(c, ui_idi(base, i + 10), r, small[i].icon,
-                       UI_ROUND | UI_COMPACT, small[i].tip))
+    if (ui_round_item(c, ui_idi(base, i + 10), mo_x(c, small[i].x),
+                      mo_y(c, small[i].y), d, small[i].icon, 0, small[i].tip))
       wheel(a, small[i].action);
   }
   return ui_rect(scr.x, scr.y + scr.h - outer, outer, outer);
@@ -1111,7 +1109,7 @@ static void modern_original_tray(UiCtx *c, const char *title, const char *const 
     float b = 18*k, end = view.x + view.w + 2*k;
     float oy = view.y + (view.h - b)/2;
     if (ui_icon_button(c, sid ^ 1, ui_rect(end, oy, b, b), UI_ICON_CHEV, UI_COMPACT, "Scroll tools"))
-      *ui_state(c, sid) -= 3 * (art_w + gap);
+      *ui_state(c, sid) += 3 * (art_w + gap);
   }
   if (undo_x >= 0) {
     float b = 25*k;
