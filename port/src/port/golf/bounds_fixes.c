@@ -14,6 +14,7 @@
 #include "golf_protos.h"
 #include "port/runtime.h"
 #include "port/staff.h"
+#include "re_bounds.h"
 
 #define G8(a) (*(volatile int8_t *)(uintptr_t)(a))
 #define G32(a) (*(volatile int32_t *)(uintptr_t)(a))
@@ -90,11 +91,12 @@ static int len_of(const char *s) {
 // appends src to the text buffer; bounded: never past its end
 static void text_cat(const char *src, int bounded) {
   char *t = (char *)(uintptr_t)TEXT;
-  int n = len_of(t);
-  for (int i = 0; src[i]; i++) {
-    if (bounded && n >= TEXT_SIZE - 1) break;
-    t[n++] = src[i];
+  if (bounded) {
+    sg_re_bounded_append(t, TEXT_SIZE, src);
+    return;
   }
+  int n = len_of(t);
+  for (int i = 0; src[i]; i++) t[n++] = src[i];
   t[n] = 0;
 }
 
