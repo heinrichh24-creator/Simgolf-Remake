@@ -88,6 +88,23 @@ static inline unsigned sg_re_bounded_length(const char *text, unsigned limit) {
   return length;
 }
 
+/* Append into a fixed-size game text buffer without scanning past its end.
+ * If a damaged/unterminated destination is found, terminate it in place and
+ * refuse to append. Valid strings retain the previous truncation behavior.
+ */
+static inline int sg_re_bounded_append(char *dst, unsigned capacity, const char *src) {
+  if (!dst || !src || !capacity) return 0;
+  unsigned used = sg_re_bounded_length(dst, capacity);
+  if (used == capacity) {
+    dst[capacity - 1] = 0;
+    return 0;
+  }
+  unsigned i = 0;
+  while (src[i] && used < capacity - 1) dst[used++] = src[i++];
+  dst[used] = 0;
+  return src[i] == 0;
+}
+
 static inline int sg_re_append_fits(const char *text, unsigned boundary,
                                     const char *name, unsigned name_limit,
                                     const char *separator, unsigned separator_limit) {
