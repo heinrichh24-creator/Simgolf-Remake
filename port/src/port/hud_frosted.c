@@ -197,7 +197,15 @@ static int hud_shown(void) {
 }
 
 // ui.hud_density: jwe (default, the maintainer's pick R5, set by the ui_hud mod), regular, compact, minimal, ...
+static int modern_original_selected(void) {
+  const char *v = mods_get("ui.hud_density");
+  return v && !strcasecmp(v, "modern_original");
+}
+
 static int hud_density(void) {
+  // This experimental HUD is opt-in through the mod and must not change
+  // Mint/Original, even when the normal layout lock is enabled.
+  if (modern_original_selected()) return HUD_MODERN_ORIGINAL;
   // Keep the selected Corners layout even when an older options file names an alternative.
   // The legacy parser is retained only for explicit compatibility comparisons.
   if (mods_get_int("fixes.hud_layout", 1)) return HUD_JWE;
@@ -226,9 +234,9 @@ static void log_coverage(const HudSnap *s) {
   if (!on || ++frames % 15) return;
   float cov = ui_coverage(g_ui, 4);
   if (cov < last - 0.0004f || cov > last + 0.0004f) {
-    static const char *const names[18] = {"regular", "compact", "minimal", "compact_column", "wheel", "fan", "wheel_stats",
+    static const char *const names[19] = {"regular", "compact", "minimal", "compact_column", "wheel", "fan", "wheel_stats",
                                           "card", "quarter", "lshape", "collapsed", "stock", "card_right",
-                                          "bars", "topbar", "ribbon", "bottombar", "jwe"};
+                                          "bars", "topbar", "ribbon", "bottombar", "jwe", "modern_original"};
     int tray = s->dock_mode >= 0 && s->dock_mode <= 4 && !g_hud.tray_hidden && (g_hud.density != HUD_JWE || g_hud.bar_open);
     const char *bar = g_hud.hidden ? "hidden" : g_hud.density != HUD_JWE ? "bar" : g_hud.bar_open ? "bar open" : "bar collapsed";
     fprintf(stderr, "ui: coverage %.1f%% (density %s, %s, tray %s)\n", cov * 100, names[g_hud.density], bar,
@@ -337,8 +345,9 @@ static void draw(const HdUiFrame *f, void *user) {
   update_art(r);
   // Live, persisted Options switch. Keep the JWE top stats even when the
   // original 2002 construction wheel and trays take over the bottom edge.
-  g_hud.original_bottom = mods_get_int("ui.original_bottom", 1) != 0;
-  g_hud.density = g_hud.original_bottom ? HUD_JWE : hud_density();
+  int requested_density = hud_density();
+  g_hud.original_bottom = requested_density != HUD_MODERN_ORIGINAL && mods_get_int("ui.original_bottom", 1) != 0;
+  g_hud.density = g_hud.original_bottom ? HUD_JWE : requested_density;
   hide_key(g_hud.hide_key, sizeof g_hud.hide_key);
   if (g_toggle_hidden) {
     g_toggle_hidden = 0;
@@ -489,7 +498,7 @@ static int input(SDL_Event *e, int course, void *user) {
       if (e->key.keysym.sym == SDLK_ESCAPE && !opt_is_open() && gwf_escape(e->key.repeat)) return 1;
       // In hybrid mode let the original game dismiss the active tray/tool.
       if (e->key.keysym.sym == SDLK_ESCAPE && mode == HUD_MODE_FROSTED &&
-          mods_get_int("ui.original_bottom", 1)) return 0;
+          mods_get_int("ui.original_bottom", 1) && !modern_original_selected()) return 0;
       if (e->key.keysym.sym == SDLK_ESCAPE) fprintf(stderr, "hud: esc key (visible %d, options %d, dialog %d)\n", g_visible, opt_is_open(), dlgf_active());
       if (e->key.keysym.sym == SDLK_ESCAPE && g_visible && !opt_is_open() && !dlgf_active()) {
         if (!e->key.repeat) g_esc = 1;   // each Esc is one step (the draw runs ui_hud_escape)
@@ -526,7 +535,7 @@ static int input(SDL_Event *e, int course, void *user) {
     return 0;
   }
   int to = ui_route_event(g_ui, &u);
-  if (mode == HUD_MODE_FROSTED && !mods_get_int("ui.original_bottom", 1) &&
+  if (mode == HUD_MODE_FROSTED && (!mods_get_int("ui.original_bottom", 1) || modern_original_selected()) &&
       u.kind == UI_EV_DOWN && (to & UI_ROUTE_GAME)) {
     lock();
     int placing = hudf_keep_tray_on_world_click(&g_snap);
