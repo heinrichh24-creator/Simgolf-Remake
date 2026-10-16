@@ -2,6 +2,7 @@
 // section 4 (D5); what each control does in the game: docs/ui/HUD_DISPATCH.md.
 #include "port/ui/ui_hud.h"
 #include "port/ui/ui_rules.h"
+#include "mods/mods.h"
 
 #include <math.h>
 #include <stdio.h>
