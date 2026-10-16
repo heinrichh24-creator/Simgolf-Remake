@@ -83,6 +83,7 @@
 #include "port/hd_art.h"
 #include "port/hud_frosted.h"
 #include "port/hd_native.h"
+#include "port/hd_canvas_bounds.h"
 #include "port/ui/ui_course_map.h"
 #include "port/hd_present_policy.h"
 #include "port/dialogs_frosted.h"
@@ -264,7 +265,9 @@ static void set_key(const char *k, const char *v) {
   } else if (!_stricmp(k, "vsync")) g_cfg.vsync = atoi(v) != 0;
   else if (!_stricmp(k, "fps")) g_cfg.fps = atoi(v) < 0 ? 0 : atoi(v);
   else if (!_stricmp(k, "canvas")) {
-    if (!parse_size(v, &g_cfg.canvas_w, &g_cfg.canvas_h)) g_cfg.canvas_w = g_cfg.canvas_h = 0;   // auto
+    if (!parse_size(v, &g_cfg.canvas_w, &g_cfg.canvas_h) ||
+        !hd_canvas_dimensions_supported(g_cfg.canvas_w, g_cfg.canvas_h))
+      g_cfg.canvas_w = g_cfg.canvas_h = 0;   // auto: invalid size cannot allocate a game DIB
   }
   else if (!_stricmp(k, "terrain")) g_cfg.terrain = atoi(v) != 0;
   else if (!_stricmp(k, "ui_scale")) {
