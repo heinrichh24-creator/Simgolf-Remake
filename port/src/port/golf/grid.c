@@ -121,7 +121,7 @@ void grid_save_tag(int fd, int reading) {
   } else {
     crt_lseek(fd, at, 0);   // an original file: the first field starts here
   }
-  if (w < 50 || h < 50 || w > GRID_MAX_SIDE || h > GRID_MAX_SIDE) {
+  if (!grid_dimensions_supported(w, h)) {
     fprintf(stderr, "map: file says %d x %d, not a size this build can hold\n", w, h);
     w = g_map_w;
     h = g_map_h;
