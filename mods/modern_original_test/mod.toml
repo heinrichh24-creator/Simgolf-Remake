@@ -1,0 +1,38 @@
+# Modern Original: faithful diagonal button positions with Frosted Mint skins.
+# Requires a binary built with HUD_MODERN_ORIGINAL support. All coordinates
+# are in the 788x450 reference drawing and can be tuned by replacing this file.
+id = "modern_original_test"
+name = "Modern Original (Experimental)"
+version = "0.2.0"
+authors = ["SimGolf community"]
+description = "Use the three descending 2002-style circles, thin mint quarter-wheel and context-only bottom construction tray."
+platform = "^1.0"
+game = ">=1.2.0"
+tags = ["visual", "ui", "experimental"]
+load_after = ["ui_hud"]
+
+[dependencies]
+ui_hud = ">=0.1.0"
+
+[settings]
+"ui.hud_density" = "modern_original"
+"ui.original_bottom" = "0"
+# Overall geometry multiplier; 1 reproduces the supplied 788x450 sketch.
+"ui.mo_scale" = "1"
+# Diagonal: golf/terrain (upper left), buildings (middle), people (lower right).
+"ui.mo_course_x" = "42"
+"ui.mo_course_y" = "312"
+"ui.mo_course_d" = "70"
+"ui.mo_build_x" = "121"
+"ui.mo_build_y" = "338"
+"ui.mo_build_d" = "70"
+"ui.mo_people_x" = "177"
+"ui.mo_people_y" = "406"
+"ui.mo_people_d" = "70"
+# Translucent ring backing / integrated controls.
+"ui.mo_outer_radius" = "176"
+"ui.mo_inner_radius" = "150"
+"ui.mo_small_d" = "23"
+# Bottom construction tray, visible only when a category is opened.
+"ui.mo_tray_x" = "216"
+"ui.mo_tray_h" = "80"
