@@ -355,6 +355,90 @@ static int SDLCALL map_mouse(void *user, SDL_Event *e) {
 // consumes it. Never trust a truncated run or an unbounded glyph count.
 // Opt-in experimental glyph replay using original font outlines through Win32 GDI.
 // No original pixels are erased yet; this is for geometry and colour comparison.
+// Text replay is render-thread-only. Cache white alpha-mask glyph textures, then
+// tint per run: a color change must not trigger bitmap generation or GPU upload.
+// Quantize glyph heights to quarter pixels to avoid unbounded entries on resize.
+#define HD_TEXT_GLYPH_CACHE_SLOTS 512
+typedef struct {
+  SDL_Texture *texture;
+  const unsigned char *font_data;
+  int file, ch, height_q, width, height, xoff, yoff;
+  uint64_t last_used;
+  int occupied;
+} HdTextGlyph;
+static HdTextGlyph g_hd_text_glyphs[HD_TEXT_GLYPH_CACHE_SLOTS];
+static SDL_Renderer *g_hd_text_glyph_renderer;
+static uint64_t g_hd_text_glyph_clock;
+
+static void hd_text_glyph_cache_clear(void) {
+  for (int i = 0; i < HD_TEXT_GLYPH_CACHE_SLOTS; i++) {
+    if (g_hd_text_glyphs[i].texture)
+      SDL_DestroyTexture(g_hd_text_glyphs[i].texture);
+    memset(&g_hd_text_glyphs[i], 0, sizeof g_hd_text_glyphs[i]);
+  }
+  g_hd_text_glyph_clock = 0;
+}
+
+static HdTextGlyph *hd_text_glyph(SDL_Renderer *renderer, int file,
+                                  const unsigned char *font, stbtt_fontinfo *info,
+                                  int ch, int height_q) {
+  if (g_hd_text_glyph_renderer != renderer) {
+    // Renderer-owned textures are invalid after a renderer restart. The owning
+    // SDL renderer releases them; never destroy pointers from an old renderer.
+    memset(g_hd_text_glyphs, 0, sizeof g_hd_text_glyphs);
+    g_hd_text_glyph_renderer = renderer;
+    g_hd_text_glyph_clock = 0;
+  }
+  uint64_t tick = ++g_hd_text_glyph_clock;
+  HdTextGlyph *slot = NULL;
+  for (int i = 0; i < HD_TEXT_GLYPH_CACHE_SLOTS; i++) {
+    HdTextGlyph *g = &g_hd_text_glyphs[i];
+    if (g->occupied && g->font_data == font && g->file == file &&
+        g->ch == ch && g->height_q == height_q) {
+      g->last_used = tick;
+      return g;
+    }
+    if (!slot || (!g->occupied && slot->occupied) ||
+        (g->occupied == slot->occupied && g->last_used < slot->last_used))
+      slot = g;
+  }
+  if (!slot) return NULL;
+  if (slot->texture) SDL_DestroyTexture(slot->texture);
+  memset(slot, 0, sizeof *slot);
+  slot->occupied = 1;
+  slot->font_data = font;
+  slot->file = file;
+  slot->ch = ch;
+  slot->height_q = height_q;
+  slot->last_used = tick;
+  float scale = stbtt_ScaleForPixelHeight(info, height_q * 0.25f);
+  int w = 0, h = 0, xo = 0, yo = 0;
+  unsigned char *bitmap = stbtt_GetCodepointBitmap(info, 0, scale, ch, &w, &h, &xo, &yo);
+  slot->xoff = xo;
+  slot->yoff = yo;
+  if (!bitmap || w <= 0 || h <= 0 || w > 512 || h > 512) {
+    if (bitmap) stbtt_FreeBitmap(bitmap, NULL);
+    return slot;  // Empty glyph (e.g. space) is a valid cached entry.
+  }
+  SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+  if (surface) {
+    for (int y = 0; y < h; y++) {
+      Uint32 *pixels = (Uint32 *)((unsigned char *)surface->pixels + y * surface->pitch);
+      for (int x = 0; x < w; x++)
+        pixels[x] = ((Uint32)bitmap[y * w + x] << 24) | 0x00ffffffu;
+    }
+    slot->texture = SDL_CreateTextureFromSurface(renderer, surface);
+    if (slot->texture) SDL_SetTextureBlendMode(slot->texture, SDL_BLENDMODE_BLEND);
+    SDL_FreeSurface(surface);
+  }
+  stbtt_FreeBitmap(bitmap, NULL);
+  slot->width = w;
+  slot->height = h;
+  return slot;
+}
+
+// Opt-in geometry comparison; original low-resolution pixels remain visible.
+// This deliberately does NOT claim to implement text replacement.
 static int hd_text_validate(const float *runs, int count, int *run_count, int *glyph_count);
 static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *target,
                                       const float *data, int used, int vx, int vy,
@@ -366,63 +450,51 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
     enabled = v && *v && strcmp(v, "0") != 0;
   }
   if (!enabled || !data || used <= 0 || sx <= 0 || sy <= 0 || !fonts || !sizes) return;
-  int valid_runs = 0;
-  int valid_glyphs = 0;
+  int valid_runs = 0, valid_glyphs = 0;
   if (!hd_text_validate(data, used, &valid_runs, &valid_glyphs)) return;
   SDL_SetRenderTarget(renderer, target);
-  // Comparison mode intentionally overlays the original text pixels.
+  SDL_Rect previous_clip;
+  SDL_bool was_clipped = SDL_RenderIsClipEnabled(renderer);
+  if (was_clipped) SDL_RenderGetClipRect(renderer, &previous_clip);
   int at = 0, drawn = 0;
-  while (at + 13 <= used && drawn < 512) {
+  while (at + 13 <= used && drawn < 2048) {
     int count = (int)data[at + 12];
-    if (count < 0 || count > (used - at - 13) / 3) break;
     int file = (int)data[at], rgb = (int)data[at + 2];
     float em = data[at + 1];
-    if (file >= 0 && file < HD_TEXT_FONT_MAX && fonts[file] && sizes[file] > 0 && em > 0 && em < 200) {
+    if (file >= 0 && file < HD_TEXT_FONT_MAX && fonts[file] &&
+        sizes[file] > 0 && em > 0 && em < 200) {
       stbtt_fontinfo info;
       int font_offset = stbtt_GetFontOffsetForIndex(fonts[file], 0);
       if (font_offset >= 0 && stbtt_InitFont(&info, fonts[file], font_offset)) {
-        float scale = stbtt_ScaleForPixelHeight(&info, em * sy);
-        SDL_Rect clip = {vx + (int)lroundf(data[at + 5] * sx), vy + (int)lroundf(data[at + 6] * sy),
-                         (int)lroundf((data[at + 7] - data[at + 5]) * sx),
-                         (int)lroundf((data[at + 8] - data[at + 6]) * sy)};
-        if (clip.w <= 0 || clip.h <= 0) { at += 13 + count * 3; continue; }
-        SDL_RenderSetClipRect(renderer, &clip);
-        for (int i = 0; i < count && drawn < 512; i++, drawn++) {
-          int off = at + 13 + i * 3;
-          int ch = (int)data[off];
-          if (ch < 32 || ch > 255) continue;
-          int gw, gh, xo, yo;
-          unsigned char *bitmap = stbtt_GetCodepointBitmap(&info, 0, scale, ch, &gw, &gh, &xo, &yo);
-          if (!bitmap || gw <= 0 || gh <= 0 || gw > 512 || gh > 512) {
-            if (bitmap) stbtt_FreeBitmap(bitmap, NULL);
-            continue;
-          }
-          SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(0, gw, gh, 32, SDL_PIXELFORMAT_ARGB8888);
-          if (surface) {
-            for (int y = 0; y < gh; y++) {
-              Uint32 *pixels = (Uint32 *)((unsigned char *)surface->pixels + y * surface->pitch);
-              for (int x = 0; x < gw; x++)
-                pixels[x] = ((Uint32)bitmap[y * gw + x] << 24) | ((Uint32)(rgb & 0xff) << 16) |
-                            ((Uint32)((rgb >> 8) & 0xff) << 8) | (Uint32)((rgb >> 16) & 0xff);
+        int height_q = (int)lroundf(em * sy * 4.0f);
+        if (height_q > 0 && height_q <= 4096) {
+          SDL_Rect clip = {vx + (int)lroundf(data[at + 5] * sx),
+                           vy + (int)lroundf(data[at + 6] * sy),
+                           (int)lroundf((data[at + 7] - data[at + 5]) * sx),
+                           (int)lroundf((data[at + 8] - data[at + 6]) * sy)};
+          if (clip.w > 0 && clip.h > 0) {
+            SDL_RenderSetClipRect(renderer, &clip);
+            for (int i = 0; i < count && drawn < 2048; i++, drawn++) {
+              int off = at + 13 + i * 3;
+              int ch = (int)data[off];
+              if (ch < 32 || ch > 255) continue;
+              HdTextGlyph *g = hd_text_glyph(renderer, file, fonts[file], &info, ch, height_q);
+              if (!g || !g->texture) continue;
+              SDL_SetTextureColorMod(g->texture, (Uint8)(rgb & 255),
+                                    (Uint8)((rgb >> 8) & 255), (Uint8)((rgb >> 16) & 255));
+              SDL_Rect dst = {vx + (int)lroundf(data[off + 1] * sx) + g->xoff,
+                              vy + (int)lroundf(data[off + 2] * sy) + g->yoff,
+                              g->width, g->height};
+              SDL_RenderCopy(renderer, g->texture, NULL, &dst);
             }
-            SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surface);
-            if (tex) {
-              SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
-              SDL_Rect dst = {vx + (int)lroundf(data[off + 1] * sx) + xo,
-                              vy + (int)lroundf(data[off + 2] * sy) + yo, gw, gh};
-              SDL_RenderCopy(renderer, tex, NULL, &dst);
-              SDL_DestroyTexture(tex);
-            }
-            SDL_FreeSurface(surface);
           }
-          stbtt_FreeBitmap(bitmap, NULL);
         }
-        SDL_RenderSetClipRect(renderer, NULL);
       }
     }
     at += 13 + count * 3;
   }
-  SDL_RenderSetClipRect(renderer, NULL);
+  if (was_clipped) SDL_RenderSetClipRect(renderer, &previous_clip);
+  else SDL_RenderSetClipRect(renderer, NULL);
 }
 
 static int hd_text_validate(const float *runs, int count, int *run_count, int *glyph_count) {
