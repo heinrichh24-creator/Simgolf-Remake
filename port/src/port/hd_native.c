@@ -372,11 +372,11 @@ static int SDLCALL map_mouse(void *user, SDL_Event *e) {
 // Text replay is render-thread-only. Cache white alpha-mask glyph textures, then
 // tint per run: a color change must not trigger bitmap generation or GPU upload.
 // Quantize glyph heights to quarter pixels to avoid unbounded entries on resize.
-#define HD_TEXT_GLYPH_CACHE_SLOTS 512
+#define HD_TEXT_GLYPH_CACHE_SLOTS 1024
 typedef struct {
   SDL_Texture *texture;
   const unsigned char *font_data;
-  int file, ch, height_q, width, height, xoff, yoff;
+  int file, ch, height_q, xphase, yphase, width, height, xoff, yoff;
   uint64_t last_used;
   int occupied;
 } HdTextGlyph;
@@ -395,7 +395,7 @@ static void hd_text_glyph_cache_clear(void) {
 
 static HdTextGlyph *hd_text_glyph(SDL_Renderer *renderer, int file,
                                   const unsigned char *font, stbtt_fontinfo *info,
-                                  int ch, int height_q) {
+                                  int ch, int height_q, int xphase, int yphase) {
   if (g_hd_text_glyph_renderer != renderer) {
     // Renderer-owned textures are invalid after a renderer restart. The owning
     // SDL renderer releases them; never destroy pointers from an old renderer.
@@ -408,7 +408,8 @@ static HdTextGlyph *hd_text_glyph(SDL_Renderer *renderer, int file,
   for (int i = 0; i < HD_TEXT_GLYPH_CACHE_SLOTS; i++) {
     HdTextGlyph *g = &g_hd_text_glyphs[i];
     if (g->occupied && g->font_data == font && g->file == file &&
-        g->ch == ch && g->height_q == height_q) {
+        g->ch == ch && g->height_q == height_q &&
+        g->xphase == xphase && g->yphase == yphase) {
       g->last_used = tick;
       return g;
     }
@@ -424,10 +425,14 @@ static HdTextGlyph *hd_text_glyph(SDL_Renderer *renderer, int file,
   slot->file = file;
   slot->ch = ch;
   slot->height_q = height_q;
+  slot->xphase = xphase;
+  slot->yphase = yphase;
   slot->last_used = tick;
-  float scale = stbtt_ScaleForPixelHeight(info, height_q * 0.25f);
+  float scale = stbtt_ScaleForMappingEmToPixels(info, height_q * 0.25f);
   int w = 0, h = 0, xo = 0, yo = 0;
-  unsigned char *bitmap = stbtt_GetCodepointBitmap(info, 0, scale, ch, &w, &h, &xo, &yo);
+  unsigned char *bitmap = stbtt_GetCodepointBitmapSubpixel(info, scale, scale,
+                                     xphase * 0.25f, yphase * 0.25f,
+                                     ch, &w, &h, &xo, &yo);
   slot->xoff = xo;
   slot->yoff = yo;
   if (!bitmap || w <= 0 || h <= 0 || w > 512 || h > 512) {
@@ -507,12 +512,19 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
               int off = at + 13 + i * 3;
               int ch = (int)data[off];
               if (ch < 32 || ch > 255) continue;
-              HdTextGlyph *g = hd_text_glyph(renderer, file, fonts[file], &info, ch, height_q);
+              // Both GDI and browser use em size, not pixel-height size.
+              // Raster subpixel baseline phases instead of snapping labels.
+              float gx = vx + data[off + 1] * sx, gy = vy + data[off + 2] * sy;
+              int px = (int)floorf(gx), py = (int)floorf(gy);
+              int xp = (int)lroundf((gx - px) * 4), yp = (int)lroundf((gy - py) * 4);
+              if (xp == 4) { px++; xp = 0; }
+              if (yp == 4) { py++; yp = 0; }
+              HdTextGlyph *g = hd_text_glyph(renderer, file, fonts[file], &info,
+                                            ch, height_q, xp, yp);
               if (!g || !g->texture) continue;
               SDL_SetTextureColorMod(g->texture, (Uint8)(rgb & 255),
                                     (Uint8)((rgb >> 8) & 255), (Uint8)((rgb >> 16) & 255));
-              SDL_Rect dst = {vx + (int)lroundf(data[off + 1] * sx) + g->xoff,
-                              vy + (int)lroundf(data[off + 2] * sy) + g->yoff,
+              SDL_Rect dst = {px + g->xoff, py + g->yoff,
                               g->width, g->height};
               SDL_RenderCopy(renderer, g->texture, NULL, &dst);
               if (bold) {
