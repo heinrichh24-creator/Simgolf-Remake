@@ -105,6 +105,8 @@
 int hd_frame_w = 800, hd_frame_h = 600;
 void win_set_screen_size(int w, int h);   // win32.c (win32.h clashes with windows.h)
 int gdi_hd_text_snapshot(float *out, int cap);  // gdi.c, game-thread only
+int gdi_hd_text_native(uint16_t *frame, float *out, int cap,
+                       int (*font_ready)(int file, const void *data, int size));
 int gdi_hd_font_copy(int file, void *dst, int cap);  // gdi.c, game-thread only
 int terrain_hd_seen(void);                 // terrain_hd.cpp
 enum { F_SHARP, F_INTEGER, F_NEAREST, F_SMOOTH };
@@ -160,6 +162,17 @@ static void hd_text_capture_fonts(const float *runs, int count) {
     }
     at += 13 + n * 3;
   }
+}
+
+
+// Called under g_lock by the game thread. Only restore runs whose original
+// font has been copied and is valid, so the native renderer can redraw them.
+static int hd_text_native_font_ready(int file, const void *data, int size) {
+  if (file < 0 || file >= HD_TEXT_FONT_MAX || !data || size <= 0 ||
+      !g_frame_fonts[file] || g_frame_font_sizes[file] != size) return 0;
+  stbtt_fontinfo info;
+  int offset = stbtt_GetFontOffsetForIndex(g_frame_fonts[file], 0);
+  return offset >= 0 && stbtt_InitFont(&info, g_frame_fonts[file], offset) != 0;
 }
 
 
@@ -447,7 +460,9 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
   static int enabled = -1;
   if (enabled < 0) {
     const char *v = getenv("SIMGOLF_HD_TEXT_DRAW");
-    enabled = v && *v && strcmp(v, "0") != 0;
+    const char *replace = getenv("SIMGOLF_HD_TEXT_REPLACE");
+    enabled = (v && *v && strcmp(v, "0") != 0) ||
+              (replace && *replace && strcmp(replace, "0") != 0);
   }
   if (!enabled || !data || used <= 0 || sx <= 0 || sy <= 0 || !fonts || !sizes) return;
   int valid_runs = 0, valid_glyphs = 0;
@@ -1680,12 +1695,14 @@ int hd_present(const uint16_t *screen) {
   if (!course) layered = 0;
   // Avoid expensive record pruning/serialization unless explicitly requested.
   // Future native replay can enable capture when its font renderer is ready.
-  static int text_capture = -1;
+  static int text_capture = -1, text_replace = 0;
   if (text_capture < 0) {
     const char *v = getenv("SIMGOLF_HD_TEXT_DIAG");
     const char *draw = getenv("SIMGOLF_HD_TEXT_DRAW");
+    const char *replace = getenv("SIMGOLF_HD_TEXT_REPLACE");
+    text_replace = replace && *replace && strcmp(replace, "0") != 0;
     text_capture = (v && *v && strcmp(v, "0") != 0) ||
-                   (draw && *draw && strcmp(draw, "0") != 0);
+                   (draw && *draw && strcmp(draw, "0") != 0) || text_replace;
   }
   static float text_stage[HD_TEXT_SNAPSHOT_CAP];
   int text_used = text_capture ? gdi_hd_text_snapshot(text_stage, HD_TEXT_SNAPSHOT_CAP) : 0;
@@ -1703,6 +1720,21 @@ int hd_present(const uint16_t *screen) {
     memcpy(g_ui, screen, (size_t)FRAME_W * FRAME_H * 2);
     g_frame_cam = g_snap_cam;
     hud_course_frame_presented();
+  }
+  if (text_replace && text_used > 0) {
+    // gdi.c restores the actual pixels that lay beneath each intact original
+    // TextOut. A run is erased only when its font and codepoints can be drawn.
+    // Keep the original game screenshot as a fall-back for malformed runs.
+    uint16_t *clean = layered ? g_ui : g_frame;
+    int replaced = gdi_hd_text_native(clean, g_frame_text, HD_TEXT_SNAPSHOT_CAP,
+                                      hd_text_native_font_ready);
+    int runs = 0, glyphs = 0;
+    if (replaced > 0 && hd_text_wire_validate(g_frame_text, replaced, &runs, &glyphs))
+      g_frame_text_used = replaced;
+    else {
+      memcpy(clean, screen, (size_t)FRAME_W * FRAME_H * 2);
+      g_frame_text_used = 0;
+    }
   }
   memcpy(&g_frame_ball, &balls, sizeof balls);
   g_frame_layered = layered;
