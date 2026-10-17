@@ -373,12 +373,14 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
     float em = data[at + 1];
     if (file >= 0 && file < HD_TEXT_FONT_MAX && fonts[file] && sizes[file] > 0 && em > 0 && em < 200) {
       stbtt_fontinfo info;
-      if (stbtt_InitFont(&info, fonts[file], stbtt_GetFontOffsetForIndex(fonts[file], 0))) {
+      int font_offset = stbtt_GetFontOffsetForIndex(fonts[file], 0);
+      if (font_offset >= 0 && stbtt_InitFont(&info, fonts[file], font_offset)) {
         float scale = stbtt_ScaleForPixelHeight(&info, em * sy);
         SDL_Rect clip = {vx + (int)lroundf(data[at + 5] * sx), vy + (int)lroundf(data[at + 6] * sy),
                          (int)lroundf((data[at + 7] - data[at + 5]) * sx),
                          (int)lroundf((data[at + 8] - data[at + 6]) * sy)};
-        if (clip.w > 0 && clip.h > 0) SDL_RenderSetClipRect(renderer, &clip);
+        if (clip.w <= 0 || clip.h <= 0) { at += 13 + count * 3; continue; }
+        SDL_RenderSetClipRect(renderer, &clip);
         for (int i = 0; i < count && drawn < 512; i++, drawn++) {
           int off = at + 13 + i * 3;
           int ch = (int)data[off];
@@ -1617,7 +1619,9 @@ int hd_present(const uint16_t *screen) {
   static int text_capture = -1;
   if (text_capture < 0) {
     const char *v = getenv("SIMGOLF_HD_TEXT_DIAG");
-    text_capture = v && *v && strcmp(v, "0") != 0;
+    const char *draw = getenv("SIMGOLF_HD_TEXT_DRAW");
+    text_capture = (v && *v && strcmp(v, "0") != 0) ||
+                   (draw && *draw && strcmp(draw, "0") != 0);
   }
   static float text_stage[HD_TEXT_SNAPSHOT_CAP];
   int text_used = text_capture ? gdi_hd_text_snapshot(text_stage, HD_TEXT_SNAPSHOT_CAP) : 0;
