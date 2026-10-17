@@ -76,6 +76,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#define STB_TRUETYPE_IMPLEMENTATION
+#define STBTT_STATIC
+#include "stb_truetype.h"
 
 #include "mods/mods.h"
 #include "port/golf/hd_ui.h"
@@ -351,16 +354,67 @@ static int SDLCALL map_mouse(void *user, SDL_Event *e) {
 // No original pixels are erased yet; this is for geometry and colour comparison.
 static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *target,
                                       const float *data, int used, int vx, int vy,
-                                      float sx, float sy) {
+                                      float sx, float sy,
+                                      const unsigned char *const *fonts, const int *sizes) {
   static int enabled = -1;
   if (enabled < 0) {
     const char *v = getenv("SIMGOLF_HD_TEXT_DRAW");
     enabled = v && *v && strcmp(v, "0") != 0;
   }
-  if (!enabled || used <= 0 || sx <= 0 || sy <= 0 || !data) return;
-  // Font installation/rasterization will be added after this replay path is verified.
-  // Never render placeholder glyphs: they would disguise missing original fonts.
-  (void)renderer; (void)target; (void)vx; (void)vy;
+  if (!enabled || !data || used <= 0 || sx <= 0 || sy <= 0) return;
+  SDL_SetRenderTarget(renderer, target);
+  // Text runs are captured newest-first; draw in reverse order later when
+  // replacing original pixels. This comparison mode intentionally overlays.
+  int at = 0, drawn = 0;
+  while (at + 13 <= used && drawn < 512) {
+    int count = (int)data[at + 12];
+    if (count < 0 || count > (used - at - 13) / 3) break;
+    int file = (int)data[at], rgb = (int)data[at + 2];
+    float em = data[at + 1];
+    if (file >= 0 && file < HD_TEXT_FONT_MAX && fonts[file] && sizes[file] > 0 && em > 0 && em < 200) {
+      stbtt_fontinfo info;
+      if (stbtt_InitFont(&info, fonts[file], stbtt_GetFontOffsetForIndex(fonts[file], 0))) {
+        float scale = stbtt_ScaleForPixelHeight(&info, em * sy);
+        SDL_Rect clip = {vx + (int)lroundf(data[at + 5] * sx), vy + (int)lroundf(data[at + 6] * sy),
+                         (int)lroundf((data[at + 7] - data[at + 5]) * sx),
+                         (int)lroundf((data[at + 8] - data[at + 6]) * sy)};
+        if (clip.w > 0 && clip.h > 0) SDL_RenderSetClipRect(renderer, &clip);
+        for (int i = 0; i < count && drawn < 512; i++, drawn++) {
+          int off = at + 13 + i * 3;
+          int ch = (int)data[off];
+          if (ch < 32 || ch > 255) continue;
+          int gw, gh, xo, yo;
+          unsigned char *bitmap = stbtt_GetCodepointBitmap(&info, 0, scale, ch, &gw, &gh, &xo, &yo);
+          if (!bitmap || gw <= 0 || gh <= 0 || gw > 512 || gh > 512) {
+            if (bitmap) stbtt_FreeBitmap(bitmap, NULL);
+            continue;
+          }
+          SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(0, gw, gh, 32, SDL_PIXELFORMAT_ARGB8888);
+          if (surface) {
+            for (int y = 0; y < gh; y++) {
+              Uint32 *pixels = (Uint32 *)((unsigned char *)surface->pixels + y * surface->pitch);
+              for (int x = 0; x < gw; x++)
+                pixels[x] = ((Uint32)bitmap[y * gw + x] << 24) | ((Uint32)(rgb & 0xff) << 16) |
+                            ((Uint32)((rgb >> 8) & 0xff) << 8) | (Uint32)((rgb >> 16) & 0xff);
+            }
+            SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surface);
+            if (tex) {
+              SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+              SDL_Rect dst = {vx + (int)lroundf(data[off + 1] * sx) + xo,
+                              vy + (int)lroundf(data[off + 2] * sy) + yo, gw, gh};
+              SDL_RenderCopy(renderer, tex, NULL, &dst);
+              SDL_DestroyTexture(tex);
+            }
+            SDL_FreeSurface(surface);
+          }
+          stbtt_FreeBitmap(bitmap, NULL);
+        }
+        SDL_RenderSetClipRect(renderer, NULL);
+      }
+    }
+    at += 13 + count * 3;
+  }
+  SDL_RenderSetClipRect(renderer, NULL);
 }
 
 static int hd_text_validate(const float *runs, int count, int *run_count, int *glyph_count) {
@@ -415,6 +469,8 @@ typedef struct {
   uint8_t *mask;
   float *text_snapshot;
   int text_snapshot_used;
+  const unsigned char *text_font_data[HD_TEXT_FONT_MAX];
+  int text_font_size[HD_TEXT_FONT_MAX];
   const uint8_t *cut, *cut_ui;   // hd_art_cut_mask() for the overlay and golf's UI layer
   int terrain_on;       // the terrain layer draws under the overlay
   HdBallFrame ball;   // the balls of the latest game frame (hdball_render.c)
@@ -503,6 +559,10 @@ static void upload(Rt *t, double now) {
   EnterCriticalSection(&g_lock);
   memcpy(t->local, g_frame, (size_t)FRAME_W * FRAME_H * 2);
   t->text_snapshot_used = t->text_snapshot ? g_frame_text_used : 0;
+  for (int fi = 0; fi < HD_TEXT_FONT_MAX; fi++) {
+    t->text_font_data[fi] = g_frame_fonts[fi];
+    t->text_font_size[fi] = g_frame_font_sizes[fi];
+  }
   if (t->text_snapshot && t->text_snapshot_used > 0)
     memcpy(t->text_snapshot, g_frame_text, (size_t)t->text_snapshot_used * sizeof(float));
   t->course_view = g_frame_course;
@@ -1020,7 +1080,8 @@ static Rect compose(Rt *t, SDL_Texture *target, int cw, int ch, int *sw, int *sh
     draw_layer(t, &t->ui, target, d, *sw, *sh, t->premul);
   }
   hd_text_draw_experimental(t->r, target, t->text_snapshot, t->text_snapshot_used,
-                            d.x, d.y, (float)d.w / *sw, (float)d.h / *sh);
+                            d.x, d.y, (float)d.w / *sw, (float)d.h / *sh,
+                            t->text_font_data, t->text_font_size);
   InterlockedExchange(&g_shown_course, t->course_view);
   LONG n = g_n_ui_layers;
   if (n || g_top_draw) {
