@@ -1504,9 +1504,15 @@ int hd_present(const uint16_t *screen) {
   // title picture, which would pass for a course frame.
   int course = terrain_hd_seen() && hdt_capture(layered ? g_snap : screen, mask, g_frame_serial + 1);   // the serial this frame gets below
   if (!course) layered = 0;
-  // Serialize on the game thread, before publishing the matching pixels.
+  // Avoid expensive record pruning/serialization unless explicitly requested.
+  // Future native replay can enable capture when its font renderer is ready.
+  static int text_capture = -1;
+  if (text_capture < 0) {
+    const char *v = getenv("SIMGOLF_HD_TEXT_DIAG");
+    text_capture = v && *v && strcmp(v, "0") != 0;
+  }
   static float text_stage[HD_TEXT_SNAPSHOT_CAP];
-  int text_used = gdi_hd_text_snapshot(text_stage, HD_TEXT_SNAPSHOT_CAP);
+  int text_used = text_capture ? gdi_hd_text_snapshot(text_stage, HD_TEXT_SNAPSHOT_CAP) : 0;
   EnterCriticalSection(&g_lock);
   g_frame_text_used = text_used;
   if (text_used > 0) memcpy(g_frame_text, text_stage, (size_t)text_used * sizeof(float));
