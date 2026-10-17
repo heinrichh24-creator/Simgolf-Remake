@@ -385,6 +385,20 @@ typedef struct {
   int occupied;
 } HdTextGlyph;
 static HdTextGlyph g_hd_text_glyphs[HD_TEXT_GLYPH_CACHE_SLOTS];
+static stbtt_fontinfo g_hd_text_font_info[HD_TEXT_FONT_MAX];
+static const unsigned char *g_hd_text_initialized_fonts[HD_TEXT_FONT_MAX];
+static stbtt_fontinfo *hd_text_cached_font(int file, const unsigned char *data) {
+  if (file < 0 || file >= HD_TEXT_FONT_MAX || !data) return NULL;
+  if (g_hd_text_initialized_fonts[file] != data) {
+    g_hd_text_initialized_fonts[file] = NULL;
+    int offset = stbtt_GetFontOffsetForIndex(data, 0);
+    if (offset < 0 || !stbtt_InitFont(&g_hd_text_font_info[file], data, offset))
+      return NULL;
+    g_hd_text_initialized_fonts[file] = data;
+  }
+  return &g_hd_text_font_info[file];
+}
+
 static SDL_Renderer *g_hd_text_glyph_renderer;
 static uint64_t g_hd_text_glyph_clock;
 
@@ -511,9 +525,10 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
     float em = data[at + 1];
     if (file >= 0 && file < HD_TEXT_FONT_MAX && fonts[file] &&
         sizes[file] > 0 && em > 0 && em < 200) {
-      stbtt_fontinfo info;
-      int font_offset = stbtt_GetFontOffsetForIndex(fonts[file], 0);
-      if (font_offset >= 0 && stbtt_InitFont(&info, fonts[file], font_offset)) {
+      // Original font bytes are immutable for the lifetime of this renderer.
+      // stbtt_InitFont scans tables; do it once per loaded face, not per run.
+      stbtt_fontinfo *info = hd_text_cached_font(file, fonts[file]);
+      if (info) {
         int height_q = (int)lroundf(em * sy * 4.0f);
         if (height_q > 0 && height_q <= 4096) {
           SDL_Rect clip = {vx + (int)lroundf(data[at + 5] * sx),
@@ -533,7 +548,7 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
               int xp = (int)lroundf((gx - px) * 4), yp = (int)lroundf((gy - py) * 4);
               if (xp == 4) { px++; xp = 0; }
               if (yp == 4) { py++; yp = 0; }
-              HdTextGlyph *g = hd_text_glyph(renderer, file, fonts[file], &info,
+              HdTextGlyph *g = hd_text_glyph(renderer, file, fonts[file], info,
                                             ch, height_q, xp, yp);
               if (!g || !g->texture) continue;
               SDL_SetTextureColorMod(g->texture, (Uint8)(rgb & 255),
