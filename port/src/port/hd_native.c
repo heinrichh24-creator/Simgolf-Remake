@@ -316,6 +316,26 @@ static int SDLCALL map_mouse(void *user, SDL_Event *e) {
   return 1;
 }
 
+// Validate the game-thread text wire format before a native glyph renderer
+// consumes it. Never trust a truncated run or an unbounded glyph count.
+static int hd_text_validate(const float *runs, int count, int *run_count, int *glyph_count) {
+  int at = 0, nr = 0, ng = 0;
+  if (!runs || count < 0 || count > HD_TEXT_SNAPSHOT_CAP) return 0;
+  while (at < count) {
+    if (count - at < 13) return 0;
+    float n = runs[at + 12];
+    if (!(n >= 0 && n <= (float)((count - at - 13) / 3))) return 0;
+    int glyphs = (int)n;
+    if ((float)glyphs != n) return 0;
+    at += 13 + glyphs * 3;
+    nr++;
+    ng += glyphs;
+  }
+  if (run_count) *run_count = nr;
+  if (glyph_count) *glyph_count = ng;
+  return 1;
+}
+
 // ------------------------------------------------------------------ render thread
 
 // One canvas-sized picture and its whole-multiple copy for the sharp filter.
@@ -431,7 +451,7 @@ static void upload(Rt *t, double now) {
   int was_layered = t->layered && t->course_view;
   EnterCriticalSection(&g_lock);
   memcpy(t->local, g_frame, (size_t)FRAME_W * FRAME_H * 2);
-  t->text_snapshot_used = g_frame_text_used;
+  t->text_snapshot_used = t->text_snapshot ? g_frame_text_used : 0;
   if (t->text_snapshot && t->text_snapshot_used > 0)
     memcpy(t->text_snapshot, g_frame_text, (size_t)t->text_snapshot_used * sizeof(float));
   t->course_view = g_frame_course;
@@ -451,6 +471,19 @@ static void upload(Rt *t, double now) {
   memcpy(&t->ball, &g_frame_ball, sizeof t->ball);
   serial = g_frame_serial;
   LeaveCriticalSection(&g_lock);
+  // Diagnostic validation runs on the copied, frame-consistent snapshot.
+  static int text_diag = -1;
+  static unsigned long text_samples;
+  if (text_diag < 0) {
+    const char *v = getenv("SIMGOLF_HD_TEXT_DIAG");
+    text_diag = v && *v && strcmp(v, "0") != 0;
+  }
+  if (text_diag && (++text_samples & 63UL) == 0) {
+    int runs = 0, glyphs = 0;
+    int ok = hd_text_validate(t->text_snapshot, t->text_snapshot_used, &runs, &glyphs);
+    fprintf(stderr, "hd-text snapshot: sample=%lu valid=%d floats=%d runs=%d glyphs=%d\n",
+            text_samples, ok, t->text_snapshot_used, runs, glyphs);
+  }
   hd_art_prepare(t->r, 1);
 
   // Smooth scrolling: a camera step of a few tiles at the same zoom and
