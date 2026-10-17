@@ -102,8 +102,10 @@ static void present_sdl(void) {
 
 int hd_present(const uint16_t *screen);  // hd.c
 
+static void hd_text_diag_screen_records(void);
 void win_present(void) {
   g_presents++;
+  hd_text_diag_screen_records();
 #ifndef __EMSCRIPTEN__
   bridge_on_present();   // frame counting and bridge "step" (task-13)
 #endif
@@ -1055,6 +1057,31 @@ static void text_snapshot(TextRec *r) {
 }
 
 // Drops the records of `d` that no longer match its pixels.
+// Count surviving screen records without mutating the capture list.
+// This is deliberately a separate counter from the TextOutA route totals.
+#ifndef __EMSCRIPTEN__
+static void hd_text_diag_screen_records(void) {
+  static int enabled = -1;
+  static unsigned long samples;
+  if (enabled < 0) {
+    const char *v = getenv("SIMGOLF_HD_TEXT_DIAG");
+    enabled = v && *v && strcmp(v, "0") != 0;
+  }
+  if (!enabled || (++samples & 63UL) != 0) return;
+  unsigned long candidates = 0, intact = 0, glyphs = 0;
+  for (int i = 0; i < g_ntext; i++) {
+    TextRec *r = g_text[i];
+    if (r->dib != &g_screen_dib) continue;
+    candidates++;
+    if (text_intact(r)) { intact++; glyphs += (unsigned long)r->nglyph; }
+  }
+  fprintf(stderr, "hd-text screen: sample=%lu candidates=%lu intact=%lu glyphs=%lu\\n",
+          samples, candidates, intact, glyphs);
+}
+#else
+static void hd_text_diag_screen_records(void) {}
+#endif
+
 static void text_prune(Dib *d) {
   for (int i = g_ntext - 1; i >= 0; i--)
     if (g_text[i]->dib == d && !text_intact(g_text[i])) text_free(i);
