@@ -169,13 +169,22 @@ static void hd_text_capture_fonts(const float *runs, int count) {
 // Called under g_lock by the game thread. Only restore runs whose original
 // font has been copied and is valid, so the native renderer can redraw them.
 static int hd_text_native_font_ready(int file, const void *data, int size) {
+  // Executed on the game thread. Owned original font bytes never change.
+  // Validate TrueType tables only on first encounter, not once per TextRec
+  // on every game update (which previously rescanned the same font).
+  static const unsigned char *checked[HD_TEXT_FONT_MAX];
+  static unsigned char valid[HD_TEXT_FONT_MAX];
   if (file < 0 || file >= HD_TEXT_FONT_MAX || !data || size <= 0 ||
       !g_frame_fonts[file] || g_frame_font_sizes[file] != size) return 0;
-  stbtt_fontinfo info;
-  int offset = stbtt_GetFontOffsetForIndex(g_frame_fonts[file], 0);
-  return offset >= 0 && stbtt_InitFont(&info, g_frame_fonts[file], offset) != 0;
+  const unsigned char *bytes = g_frame_fonts[file];
+  if (checked[file] != bytes) {
+    stbtt_fontinfo info;
+    int offset = stbtt_GetFontOffsetForIndex(bytes, 0);
+    valid[file] = offset >= 0 && stbtt_InitFont(&info, bytes, offset) != 0;
+    checked[file] = bytes;
+  }
+  return valid[file];
 }
-
 
 // Frame hand-over (game thread -> render thread).
 static uint16_t *g_frame;   // FRAME_W x FRAME_H: the course layer when layered, else the whole frame
