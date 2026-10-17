@@ -355,6 +355,7 @@ static int SDLCALL map_mouse(void *user, SDL_Event *e) {
 // consumes it. Never trust a truncated run or an unbounded glyph count.
 // Opt-in experimental glyph replay using original font outlines through Win32 GDI.
 // No original pixels are erased yet; this is for geometry and colour comparison.
+static int hd_text_validate(const float *runs, int count, int *run_count, int *glyph_count);
 static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *target,
                                       const float *data, int used, int vx, int vy,
                                       float sx, float sy,
@@ -365,9 +366,11 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
     enabled = v && *v && strcmp(v, "0") != 0;
   }
   if (!enabled || !data || used <= 0 || sx <= 0 || sy <= 0) return;
+  int valid_runs = 0;
+  int valid_glyphs = 0;
+  if (!hd_text_validate(data, used, &valid_runs, &valid_glyphs)) return;
   SDL_SetRenderTarget(renderer, target);
-  // Text runs are captured newest-first; draw in reverse order later when
-  // replacing original pixels. This comparison mode intentionally overlays.
+  // Comparison mode intentionally overlays the original text pixels.
   int at = 0, drawn = 0;
   while (at + 13 <= used && drawn < 512) {
     int count = (int)data[at + 12];
