@@ -22,6 +22,22 @@ int main(void) {
   CHECK(hd_text_wire_validate(data,19+13,&r,&g)&&r==2&&g==2);
   data[19+12]=1;
   CHECK(!hd_text_wire_validate(data,19+13,&r,&g));
+  // Deterministic hostile snapshots exercise incomplete runs and invalid floats.
+  unsigned state=0x5a17c9e3u;
+  int bounded=1;
+  for (int i=0; i<25000; i++) {
+    float noise[64];
+    for (int j=0;j<64;j++) {
+      state=state*1664525u+1013904223u;
+      memcpy(&noise[j],&state,sizeof state);
+    }
+    int len=(int)(state&63u);
+    r=-1; g=-1;
+    int accepted=hd_text_wire_validate(noise,len,&r,&g);
+    if (accepted && (r<0 || r>len/13 || g<0 || g>len/3)) bounded=0;
+    if (!accepted && (r!=0 || g!=0)) bounded=0;
+  }
+  CHECK(bounded);
   CHECK(errors==0);
   printf("hd_text_wire_test: %d checks, %d failures\n",tests,errors);
   return errors ? 1 : 0;
