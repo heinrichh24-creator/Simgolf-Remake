@@ -53,6 +53,17 @@ original-font glyph geometry and x/y subpixel rasters under AddressSanitizer
 and UndefinedBehaviorSanitizer. GitHub Actions has a workflow to repeat
 these checks. Portable tests CANNOT prove correct Windows SDL behavior.
 
+## Verified Windows compiler checkpoint (no full game link)
+
+GitHub Actions run 39012710813 compiled both port/src/port/gdi.c and
+port/src/port/hd_native.c to Windows x86 object files using clang-cl, the
+Windows SDK and official SDL2 2.32.10 VC development headers. Both the
+windows-syntax and sanitizer-regression jobs passed. This verifies the
+modified units compile, but does NOT establish that the entire game links
+or runs; missing build/gen remains the full native build prerequisite.
+The user's earlier standalone golf.exe / Sim Golf Remastered.exe uploads
+are identical prebuilt binaries, not a newly compiled test release.
+
 ## Windows acceptance matrix
 
 1. Capture reference images in original mode: main menu, loading, new game,
