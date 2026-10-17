@@ -4,6 +4,7 @@ on:
     branches:
       - investigation/native-hd-text-coverage
     paths:
+      - "tools/build_hd_text_windows.ps1"
       - "port/src/port/gdi.c"
       - "port/src/port/hd_native.c"
       - "port/src/port/hd_text_wire.h"
@@ -53,6 +54,13 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Parse Windows build helper
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path tools/build_hd_text_windows.ps1), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) { $errors | Format-List; exit 1 }
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x86
