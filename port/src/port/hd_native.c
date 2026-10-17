@@ -367,8 +367,9 @@ static int SDLCALL map_mouse(void *user, SDL_Event *e) {
 
 // Validate the game-thread text wire format before a native glyph renderer
 // consumes it. Never trust a truncated run or an unbounded glyph count.
-// Opt-in experimental glyph replay using original font outlines through Win32 GDI.
-// No original pixels are erased yet; this is for geometry and colour comparison.
+// Native glyph replay uses original TrueType outlines (stb_truetype and SDL).
+// SIMGOLF_HD_TEXT_DRAW overlays for comparison; SIMGOLF_HD_TEXT_REPLACE
+// additionally restores captured original pixels on the game thread.
 // Text replay is render-thread-only. Cache white alpha-mask glyph textures, then
 // tint per run: a color change must not trigger bitmap generation or GPU upload.
 // Quantize glyph heights to quarter pixels to avoid unbounded entries on resize.
@@ -385,11 +386,10 @@ static SDL_Renderer *g_hd_text_glyph_renderer;
 static uint64_t g_hd_text_glyph_clock;
 
 static void hd_text_glyph_cache_clear(void) {
-  for (int i = 0; i < HD_TEXT_GLYPH_CACHE_SLOTS; i++) {
-    if (g_hd_text_glyphs[i].texture)
-      SDL_DestroyTexture(g_hd_text_glyphs[i].texture);
-    memset(&g_hd_text_glyphs[i], 0, sizeof g_hd_text_glyphs[i]);
-  }
+  // Called at renderer creation: SDL owns any textures from an old renderer,
+  // which may already have been destroyed. Do not dereference stale handles.
+  memset(g_hd_text_glyphs, 0, sizeof g_hd_text_glyphs);
+  g_hd_text_glyph_renderer = NULL;
   g_hd_text_glyph_clock = 0;
 }
 
@@ -451,6 +451,9 @@ static HdTextGlyph *hd_text_glyph(SDL_Renderer *renderer, int file,
     SDL_FreeSurface(surface);
   }
   stbtt_FreeBitmap(bitmap, NULL);
+  // GPU allocation failures are transient. Do not cache a missing glyph as
+  // an intentional blank; retry it on a later frame.
+  if (!slot->texture) { slot->occupied = 0; return NULL; }
   slot->width = w;
   slot->height = h;
   return slot;
@@ -1735,7 +1738,7 @@ int hd_present(const uint16_t *screen) {
   int course = terrain_hd_seen() && hdt_capture(layered ? g_snap : screen, mask, g_frame_serial + 1);   // the serial this frame gets below
   if (!course) layered = 0;
   // Avoid expensive record pruning/serialization unless explicitly requested.
-  // Future native replay can enable capture when its font renderer is ready.
+  // No extra capture cost unless diagnostic, overlay or replacement is selected.
   static int text_capture = -1, text_replace = 0;
   if (text_capture < 0) {
     const char *v = getenv("SIMGOLF_HD_TEXT_DIAG");
