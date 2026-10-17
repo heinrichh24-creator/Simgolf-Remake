@@ -1178,6 +1178,16 @@ int gdi_hd_text(uint16_t *frame, float *out, int cap, int (*font_ready)(int file
   return used;
 }
 
+// Copy a loaded original font into caller-owned storage on the game thread.
+// Never hand a render thread a pointer into the mutable GDI font table.
+// Returns required byte count; zero means the index is not a loaded font.
+int gdi_hd_font_copy(int file, void *dst, int cap) {
+  if (file < 0 || file >= g_nfonts || !g_fonts[file].data || g_fonts[file].size <= 0) return 0;
+  int size = g_fonts[file].size;
+  if (dst && cap >= size) memcpy(dst, g_fonts[file].data, (size_t)size);
+  return size;
+}
+
 // Native diagnostic handoff: serialize intact text WITHOUT changing frame pixels.
 // Runs are newest-first, using the same wire format as gdi_hd_text().
 // Called only by the game thread, before publishing the matching frame.
