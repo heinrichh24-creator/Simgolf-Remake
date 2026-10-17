@@ -8,6 +8,7 @@ on:
       - "port/src/port/hd_native.c"
       - "port/src/port/hd_text_wire.h"
       - "port/tests/hd_text_*"
+      - "tools/hd_text_buildgen_windows.ps1"
       - ".github/workflows/hd-text-portable.yml"
   workflow_dispatch:
 
@@ -25,6 +26,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Validate PowerShell build handoff syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path (Get-Location) "tools/hd_text_buildgen_windows.ps1"),
+            [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) { throw ($errors | Out-String) }
       - name: Download official SDL2 VC development headers
         shell: pwsh
         run: |
