@@ -489,7 +489,7 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
     run_offsets[nr++] = at;
     at += 13 + (int)data[at + 12] * 3;
   }
-  for (int ri = nr - 1; ri >= 0 && drawn < 2048; ri--) {
+  for (int ri = nr - 1; ri >= 0 && drawn < HD_TEXT_SNAPSHOT_CAP / HD_TEXT_WIRE_GLYPH; ri--) {
     at = run_offsets[ri];
     int count = (int)data[at + 12];
     int file = (int)data[at], rgb = (int)data[at + 2];
@@ -508,7 +508,7 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
                            (int)lroundf((data[at + 8] - data[at + 6]) * sy)};
           if (clip.w > 0 && clip.h > 0) {
             SDL_RenderSetClipRect(renderer, &clip);
-            for (int i = 0; i < count && drawn < 2048; i++, drawn++) {
+            for (int i = 0; i < count && drawn < HD_TEXT_SNAPSHOT_CAP / HD_TEXT_WIRE_GLYPH; i++, drawn++) {
               int off = at + 13 + i * 3;
               int ch = (int)data[off];
               if (ch < 32 || ch > 255) continue;
