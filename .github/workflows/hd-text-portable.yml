@@ -1,0 +1,19 @@
+name: HD text portable tests
+on:
+  push:
+    branches:
+      - investigation/native-hd-text-coverage
+    paths:
+      - "port/src/port/hd_text_wire.h"
+      - "port/tests/hd_text_*"
+      - ".github/workflows/hd-text-portable.yml"
+  workflow_dispatch:
+
+jobs:
+  sanitizer-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate native text data and TrueType geometry
+        run: sh port/tests/hd_text_wire_test.sh
