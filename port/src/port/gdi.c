@@ -1075,7 +1075,7 @@ static void hd_text_diag_screen_records(void) {
     candidates++;
     if (text_intact(r)) { intact++; glyphs += (unsigned long)r->nglyph; }
   }
-  fprintf(stderr, "hd-text screen: sample=%lu candidates=%lu intact=%lu glyphs=%lu\\n",
+  fprintf(stderr, "hd-text screen: sample=%lu candidates=%lu intact=%lu glyphs=%lu\n",
           samples, candidates, intact, glyphs);
 }
 #else
@@ -1195,7 +1195,7 @@ static void hd_text_diag_count(int route) {
   else if (route == 3) ++hd_text_diag_8;
   else ++hd_text_diag_other;
   if ((hd_text_diag_total & 255UL) == 0)
-    fprintf(stderr, "hd-text routes: total=%lu pj=%lu standard16=%lu eightbit=%lu other=%lu\\n",
+    fprintf(stderr, "hd-text routes: total=%lu pj=%lu standard16=%lu eightbit=%lu other=%lu\n",
             hd_text_diag_total, hd_text_diag_pj, hd_text_diag_16, hd_text_diag_8, hd_text_diag_other);
 }
 #else
