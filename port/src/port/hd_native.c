@@ -136,8 +136,10 @@ static int g_frame_text_used;
 static unsigned char *g_frame_fonts[HD_TEXT_FONT_MAX];
 static int g_frame_font_sizes[HD_TEXT_FONT_MAX];
 static int g_frame_font_count;
+static CRITICAL_SECTION g_lock;
 static void hd_text_capture_fonts(const float *runs, int count) {
   int at = 0;
+  // Publish the completed font table under the same lock as the frame snapshot.
   while (at + 13 <= count) {
     int n = (int)runs[at + 12];
     if (n < 0 || n > (count - at - 13) / 3) break;
@@ -147,9 +149,11 @@ static void hd_text_capture_fonts(const float *runs, int count) {
       if (size > 0 && size <= HD_TEXT_FONT_BYTES_MAX) {
         unsigned char *bytes = malloc((size_t)size);
         if (bytes && gdi_hd_font_copy(file, bytes, size) == size) {
+          EnterCriticalSection(&g_lock);
           g_frame_fonts[file] = bytes;
           g_frame_font_sizes[file] = size;
           g_frame_font_count++;
+          LeaveCriticalSection(&g_lock);
         } else free(bytes);
       }
     }
@@ -159,7 +163,6 @@ static void hd_text_capture_fonts(const float *runs, int count) {
 
 
 // Frame hand-over (game thread -> render thread).
-static CRITICAL_SECTION g_lock;
 static uint16_t *g_frame;   // FRAME_W x FRAME_H: the course layer when layered, else the whole frame
 static uint16_t *g_ui;      // the finished frame when layered: its UI is where it differs from g_frame
 static uint8_t *g_mask;     // hdt_capture's terrain mask for g_frame
