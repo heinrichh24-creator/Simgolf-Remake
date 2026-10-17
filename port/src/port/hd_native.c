@@ -101,6 +101,7 @@
 int hd_frame_w = 800, hd_frame_h = 600;
 void win_set_screen_size(int w, int h);   // win32.c (win32.h clashes with windows.h)
 int gdi_hd_text_snapshot(float *out, int cap);  // gdi.c, game-thread only
+int gdi_hd_font_copy(int file, void *dst, int cap);  // gdi.c, game-thread only
 int terrain_hd_seen(void);                 // terrain_hd.cpp
 enum { F_SHARP, F_INTEGER, F_NEAREST, F_SMOOTH };
 static const char *const k_filters[] = {"sharp", "integer", "nearest", "smooth"};
@@ -125,6 +126,34 @@ static SDL_Window *g_window;
 #define HD_TEXT_SNAPSHOT_CAP 32768
 static float g_frame_text[HD_TEXT_SNAPSHOT_CAP];
 static int g_frame_text_used;
+// Original fonts are copied into owned memory while on the game thread.
+// Never share gdi.c's mutable font pointers across threads.
+#define HD_TEXT_FONT_MAX 16
+#define HD_TEXT_FONT_BYTES_MAX (4 * 1024 * 1024)
+static unsigned char *g_frame_fonts[HD_TEXT_FONT_MAX];
+static int g_frame_font_sizes[HD_TEXT_FONT_MAX];
+static int g_frame_font_count;
+static void hd_text_capture_fonts(const float *runs, int count) {
+  int at = 0;
+  while (at + 13 <= count) {
+    int n = (int)runs[at + 12];
+    if (n < 0 || n > (count - at - 13) / 3) break;
+    int file = (int)runs[at];
+    if (file >= 0 && file < HD_TEXT_FONT_MAX && !g_frame_fonts[file]) {
+      int size = gdi_hd_font_copy(file, NULL, 0);
+      if (size > 0 && size <= HD_TEXT_FONT_BYTES_MAX) {
+        unsigned char *bytes = malloc((size_t)size);
+        if (bytes && gdi_hd_font_copy(file, bytes, size) == size) {
+          g_frame_fonts[file] = bytes;
+          g_frame_font_sizes[file] = size;
+          g_frame_font_count++;
+        } else free(bytes);
+      }
+    }
+    at += 13 + n * 3;
+  }
+}
+
 
 // Frame hand-over (game thread -> render thread).
 static CRITICAL_SECTION g_lock;
@@ -1513,6 +1542,7 @@ int hd_present(const uint16_t *screen) {
   }
   static float text_stage[HD_TEXT_SNAPSHOT_CAP];
   int text_used = text_capture ? gdi_hd_text_snapshot(text_stage, HD_TEXT_SNAPSHOT_CAP) : 0;
+  if (text_used > 0) hd_text_capture_fonts(text_stage, text_used);
   EnterCriticalSection(&g_lock);
   g_frame_text_used = text_used;
   if (text_used > 0) memcpy(g_frame_text, text_stage, (size_t)text_used * sizeof(float));
