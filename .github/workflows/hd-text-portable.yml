@@ -36,3 +36,22 @@ jobs:
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x86
           clang-cl /nologo /Zs /Iport/src /Iport/third_party/stb /Iport/src/compat/msvc /I"%RUNNER_TEMP%\SDL2\SDL2-2.32.10\include" port/src/port/gdi.c port/src/port/hd_native.c
+
+  native-win32-syntax:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+      - name: Download SDL2 development headers
+        shell: pwsh
+        run: |
+          $url = "https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-devel-2.32.10-VC.zip"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\\sdl2.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\\sdl2.zip" -DestinationPath "$env:RUNNER_TEMP\\sdl2"
+      - name: Compile-check native GDI and HD presenter (without proprietary game images)
+        shell: cmd
+        run: |
+          clang-cl /nologo /Zs /std:c11 /W3 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_WARNINGS /DSIMGOLF_PORT_FS /Iport/src /Iport/third_party/stb /Iport/src/compat/msvc /I"%RUNNER_TEMP%\\sdl2\\SDL2-2.32.10\\include" port/src/port/gdi.c port/src/port/hd_native.c
