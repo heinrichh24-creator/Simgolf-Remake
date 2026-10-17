@@ -86,6 +86,7 @@
 #include "port/hud_frosted.h"
 #include "port/hd_native.h"
 #include "port/hd_present_policy.h"
+#include "port/hd_text_wire.h"
 #include "port/dialogs_frosted.h"
 #include "port/frontend_frosted.h"
 #include "port/reports_frosted.h"
@@ -126,7 +127,7 @@ static int g_mod_on = 1;              // mods.ini hd_presentation (0: the origin
 static SDL_Window *g_window;
 
 // Diagnostic metadata, paired with the published frame serial; original pixels unchanged.
-#define HD_TEXT_SNAPSHOT_CAP 32768
+#define HD_TEXT_SNAPSHOT_CAP HD_TEXT_WIRE_CAP
 static float g_frame_text[HD_TEXT_SNAPSHOT_CAP];
 static int g_frame_text_used;
 // Original fonts are copied into owned memory while on the game thread.
@@ -439,7 +440,6 @@ static HdTextGlyph *hd_text_glyph(SDL_Renderer *renderer, int file,
 
 // Opt-in geometry comparison; original low-resolution pixels remain visible.
 // This deliberately does NOT claim to implement text replacement.
-static int hd_text_validate(const float *runs, int count, int *run_count, int *glyph_count);
 static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *target,
                                       const float *data, int used, int vx, int vy,
                                       float sx, float sy,
@@ -451,7 +451,7 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
   }
   if (!enabled || !data || used <= 0 || sx <= 0 || sy <= 0 || !fonts || !sizes) return;
   int valid_runs = 0, valid_glyphs = 0;
-  if (!hd_text_validate(data, used, &valid_runs, &valid_glyphs)) return;
+  if (!hd_text_wire_validate(data, used, &valid_runs, &valid_glyphs)) return;
   SDL_SetRenderTarget(renderer, target);
   SDL_Rect previous_clip;
   SDL_bool was_clipped = SDL_RenderIsClipEnabled(renderer);
@@ -505,35 +505,6 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
   else SDL_RenderSetClipRect(renderer, NULL);
 }
 
-static int hd_text_validate(const float *runs, int count, int *run_count, int *glyph_count) {
-  int at = 0, nr = 0, ng = 0;
-  if (run_count) *run_count = 0;
-  if (glyph_count) *glyph_count = 0;
-  if (count < 0 || count > HD_TEXT_SNAPSHOT_CAP || (count && !runs)) return 0;
-  while (at < count) {
-    if (count - at < 13) return 0;
-    // Reject NaN/Inf and malformed metadata before any renderer reads it.
-    for (int j = 0; j < 13; j++) if (!isfinite(runs[at + j])) return 0;
-    float n = runs[at + 12];
-    if (!(n >= 0 && n <= (float)((count - at - 13) / 3))) return 0;
-    int glyphs = (int)n;
-    if ((float)glyphs != n) return 0;
-    // All coordinates are finite already. Bound them as well: lroundf and
-    // float->int conversion are undefined for out-of-range values.
-    for (int j = 0; j < 12; j++)
-      if (runs[at + j] < -1000000.0f || runs[at + j] > 1000000.0f) return 0;
-    for (int j = 0; j < glyphs * 3; j++)
-      if (!isfinite(runs[at + 13 + j]) ||
-          runs[at + 13 + j] < -1000000.0f || runs[at + 13 + j] > 1000000.0f)
-        return 0;
-    at += 13 + glyphs * 3;
-    nr++;
-    ng += glyphs;
-  }
-  if (run_count) *run_count = nr;
-  if (glyph_count) *glyph_count = ng;
-  return 1;
-}
 
 // ------------------------------------------------------------------ render thread
 
@@ -685,7 +656,7 @@ static void upload(Rt *t, double now) {
   }
   if (text_diag && (++text_samples & 63UL) == 0) {
     int runs = 0, glyphs = 0;
-    int ok = hd_text_validate(t->text_snapshot, t->text_snapshot_used, &runs, &glyphs);
+    int ok = hd_text_wire_validate(t->text_snapshot, t->text_snapshot_used, &runs, &glyphs);
     fprintf(stderr, "hd-text snapshot: sample=%lu valid=%d floats=%d runs=%d glyphs=%d\n",
             text_samples, ok, t->text_snapshot_used, runs, glyphs);
   }
@@ -1720,7 +1691,7 @@ int hd_present(const uint16_t *screen) {
   int text_used = text_capture ? gdi_hd_text_snapshot(text_stage, HD_TEXT_SNAPSHOT_CAP) : 0;
   if (text_used > 0) {
     int runs = 0, glyphs = 0;
-    if (hd_text_validate(text_stage, text_used, &runs, &glyphs))
+    if (hd_text_wire_validate(text_stage, text_used, &runs, &glyphs))
       hd_text_capture_fonts(text_stage, text_used);
     else text_used = 0;  // Fail closed: never publish malformed glyph metadata.
   }
