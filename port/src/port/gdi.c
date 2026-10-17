@@ -1150,7 +1150,9 @@ static void text_copy(Dib *dst, int dx, int dy, int w, int h, Dib *src, int sx, 
 // [file, em, rgb, bold, underline, clip x0 y0 x1 y1, underline x0 x1 y, n,
 // (char, x, baseline) * n] per run, up to `cap` floats. Text in a font the
 // display can't draw yet (font_ready) stays in the frame. Returns the floats used.
-int gdi_hd_text(uint16_t *frame, float *out, int cap, int (*font_ready)(int file, const void *data, int size)) {
+static int gdi_hd_text_internal(uint16_t *frame, float *out, int cap,
+                                int (*font_ready)(int file, const void *data, int size),
+                                int native_safe) {
   Dib *d = &g_screen_dib;
   memcpy(frame, d->bits, (size_t)d->stride * d->h);
   text_prune(d);
@@ -1160,6 +1162,22 @@ int gdi_hd_text(uint16_t *frame, float *out, int cap, int (*font_ready)(int file
   for (int i = g_ntext - 1; i >= 0; i--) {
     TextRec *r = g_text[i];
     if (r->dib != d) continue;
+    if (native_safe) {
+      // Do not erase glyphs the native path cannot reproduce. This filter is
+      // not used by gdi_hd_text(), preserving the existing browser renderer.
+      if (r->nglyph <= 0 || !(r->em > 0.0f && r->em < 200.0f) ||
+          r->clip[2] <= r->clip[0] || r->clip[3] <= r->clip[1]) continue;
+      int replayable = 1;
+      for (int k = 0; k < r->nglyph; k++) {
+        float code = r->glyph[k * 3];
+        if (!isfinite(code) || code < 32 || code > 255 || (float)(int)code != code ||
+            !isfinite(r->glyph[k * 3 + 1]) || !isfinite(r->glyph[k * 3 + 2])) {
+          replayable = 0;
+          break;
+        }
+      }
+      if (!replayable) continue;
+    }
     FontFile *ff = &g_fonts[r->file];
     if (!font_ready(r->file, ff->data, ff->size)) continue;
     int need = 13 + r->nglyph * 3;
@@ -1176,6 +1194,18 @@ int gdi_hd_text(uint16_t *frame, float *out, int cap, int (*font_ready)(int file
     used += need;
   }
   return used;
+}
+
+// The Win32 renderer restores only text whose original TTF can be replayed.
+// Other text remains in the pixel frame, avoiding holes in menus/dialogs.
+// The web renderer retains its full original selection policy.
+int gdi_hd_text(uint16_t *frame, float *out, int cap,
+                int (*font_ready)(int file, const void *data, int size)) {
+  return gdi_hd_text_internal(frame, out, cap, font_ready, 0);
+}
+int gdi_hd_text_native(uint16_t *frame, float *out, int cap,
+                       int (*font_ready)(int file, const void *data, int size)) {
+  return gdi_hd_text_internal(frame, out, cap, font_ready, 1);
 }
 
 // Copy a loaded original font into caller-owned storage on the game thread.
