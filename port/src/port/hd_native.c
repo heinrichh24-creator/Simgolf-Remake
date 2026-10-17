@@ -347,6 +347,22 @@ static int SDLCALL map_mouse(void *user, SDL_Event *e) {
 
 // Validate the game-thread text wire format before a native glyph renderer
 // consumes it. Never trust a truncated run or an unbounded glyph count.
+// Opt-in experimental glyph replay using original font outlines through Win32 GDI.
+// No original pixels are erased yet; this is for geometry and colour comparison.
+static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *target,
+                                      const float *data, int used, int vx, int vy,
+                                      float sx, float sy) {
+  static int enabled = -1;
+  if (enabled < 0) {
+    const char *v = getenv("SIMGOLF_HD_TEXT_DRAW");
+    enabled = v && *v && strcmp(v, "0") != 0;
+  }
+  if (!enabled || used <= 0 || sx <= 0 || sy <= 0 || !data) return;
+  // Font installation/rasterization will be added after this replay path is verified.
+  // Never render placeholder glyphs: they would disguise missing original fonts.
+  (void)renderer; (void)target; (void)vx; (void)vy;
+}
+
 static int hd_text_validate(const float *runs, int count, int *run_count, int *glyph_count) {
   int at = 0, nr = 0, ng = 0;
   if (run_count) *run_count = 0;
@@ -1003,6 +1019,8 @@ static Rect compose(Rt *t, SDL_Texture *target, int cw, int ch, int *sw, int *sh
     if (t->art_ui) hd_art_draw(HD_ART_TOP, t->r, d.x, d.y, k);   // golf's UI art in hi-res, under the rest of its UI
     draw_layer(t, &t->ui, target, d, *sw, *sh, t->premul);
   }
+  hd_text_draw_experimental(t->r, target, t->text_snapshot, t->text_snapshot_used,
+                            d.x, d.y, (float)d.w / *sw, (float)d.h / *sh);
   InterlockedExchange(&g_shown_course, t->course_view);
   LONG n = g_n_ui_layers;
   if (n || g_top_draw) {
