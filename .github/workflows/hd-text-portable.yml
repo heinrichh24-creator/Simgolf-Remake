@@ -31,11 +31,12 @@ jobs:
           $url = "https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-devel-2.32.10-VC.zip"
           Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\SDL2.zip"
           Expand-Archive "$env:RUNNER_TEMP\SDL2.zip" -DestinationPath "$env:RUNNER_TEMP\SDL2"
-      - name: Type-check native renderer and GDI in x86 Windows compiler
+      - name: Compile native renderer and GDI as Windows x86 objects
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x86
-          clang-cl /nologo /Zs /Iport/src /Iport/third_party/stb /Iport/src/compat/msvc /I"%RUNNER_TEMP%\SDL2\SDL2-2.32.10\include" port/src/port/gdi.c port/src/port/hd_native.c
+          clang-cl /nologo /c /O1 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_WARNINGS /D_USE_MATH_DEFINES /Iport/src /Iport/third_party/stb /Iport/src/compat/msvc /I"%RUNNER_TEMP%\SDL2\SDL2-2.32.10\include" /Fo"%RUNNER_TEMP%\gdi_hd.obj" port/src/port/gdi.c
+          clang-cl /nologo /c /O1 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_WARNINGS /D_USE_MATH_DEFINES /Iport/src /Iport/third_party/stb /Iport/src/compat/msvc /I"%RUNNER_TEMP%\SDL2\SDL2-2.32.10\include" /Fo"%RUNNER_TEMP%\hd_native_hd.obj" port/src/port/hd_native.c
 
   native-win32-syntax:
     runs-on: windows-latest
