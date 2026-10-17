@@ -471,6 +471,10 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
   SDL_Rect previous_clip;
   SDL_bool was_clipped = SDL_RenderIsClipEnabled(renderer);
   if (was_clipped) SDL_RenderGetClipRect(renderer, &previous_clip);
+  Uint8 previous_r, previous_g, previous_b, previous_a;
+  SDL_BlendMode previous_blend;
+  SDL_GetRenderDrawColor(renderer, &previous_r, &previous_g, &previous_b, &previous_a);
+  SDL_GetRenderDrawBlendMode(renderer, &previous_blend);
   // gdi.c publishes newest runs first because pixel restoration must undo
   // the stack backwards. Replay glyphs oldest first so overlapping text keeps
   // its original Z order (the web renderer uses the same convention).
@@ -484,6 +488,7 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
     at = run_offsets[ri];
     int count = (int)data[at + 12];
     int file = (int)data[at], rgb = (int)data[at + 2];
+    int bold = data[at + 3] != 0, underline = data[at + 4] != 0;
     float em = data[at + 1];
     if (file >= 0 && file < HD_TEXT_FONT_MAX && fonts[file] &&
         sizes[file] > 0 && em > 0 && em < 200) {
@@ -510,12 +515,36 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
                               vy + (int)lroundf(data[off + 2] * sy) + g->yoff,
                               g->width, g->height};
               SDL_RenderCopy(renderer, g->texture, NULL, &dst);
+              if (bold) {
+                // Match the web renderer's 1 canvas-pixel emboldening.
+                int steps = (int)ceilf(sx);
+                if (steps < 1) steps = 1;
+                if (steps > 16) steps = 16;
+                for (int b = 1; b <= steps; b++) {
+                  dst.x++;
+                  SDL_RenderCopy(renderer, g->texture, NULL, &dst);
+                }
+              }
+            }
+            if (underline && data[at + 10] > data[at + 9]) {
+              SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+              SDL_SetRenderDrawColor(renderer, (Uint8)(rgb & 255),
+                                     (Uint8)((rgb >> 8) & 255),
+                                     (Uint8)((rgb >> 16) & 255), 255);
+              SDL_Rect line = {
+                vx + (int)lroundf(data[at + 9] * sx),
+                vy + (int)lroundf(data[at + 11] * sy),
+                (int)lroundf((data[at + 10] - data[at + 9]) * sx),
+                (int)fmaxf(1.0f, roundf(sy)) };
+              if (line.w > 0) SDL_RenderFillRect(renderer, &line);
             }
           }
         }
       }
     }
   }
+  SDL_SetRenderDrawColor(renderer, previous_r, previous_g, previous_b, previous_a);
+  SDL_SetRenderDrawBlendMode(renderer, previous_blend);
   if (was_clipped) SDL_RenderSetClipRect(renderer, &previous_clip);
   else SDL_RenderSetClipRect(renderer, NULL);
 }
