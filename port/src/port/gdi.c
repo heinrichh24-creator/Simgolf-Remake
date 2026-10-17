@@ -1178,6 +1178,31 @@ int gdi_hd_text(uint16_t *frame, float *out, int cap, int (*font_ready)(int file
   return used;
 }
 
+// Native diagnostic handoff: serialize intact text WITHOUT changing frame pixels.
+// Runs are newest-first, using the same wire format as gdi_hd_text().
+// Called only by the game thread, before publishing the matching frame.
+int gdi_hd_text_snapshot(float *out, int cap) {
+  if (!out || cap <= 0) return 0;
+  Dib *d = &g_screen_dib;
+  text_prune(d);
+  int used = 0;
+  for (int i = g_ntext - 1; i >= 0; i--) {
+    TextRec *r = g_text[i];
+    if (r->dib != d || r->nglyph < 0 || r->nglyph > (cap - 13) / 3) continue;
+    int need = 13 + r->nglyph * 3;
+    if (need > cap - used) break;
+    float *o = out + used;
+    o[0] = (float)r->file; o[1] = r->em; o[2] = (float)r->rgb;
+    o[3] = (float)r->bold; o[4] = (float)r->underline;
+    for (int k = 0; k < 4; k++) o[5 + k] = (float)r->clip[k];
+    o[9] = (float)r->uw0; o[10] = (float)r->uw1;
+    o[11] = (float)r->ubase; o[12] = (float)r->nglyph;
+    memcpy(o + 13, r->glyph, (size_t)r->nglyph * 3 * sizeof(float));
+    used += need;
+  }
+  return used;
+}
+
 // Opt-in diagnostic only: counts TextOutA routes without logging private text.
 // Set SIMGOLF_HD_TEXT_DIAG=1 to emit a summary every 256 calls.
 #ifndef __EMSCRIPTEN__
