@@ -456,8 +456,17 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
   SDL_Rect previous_clip;
   SDL_bool was_clipped = SDL_RenderIsClipEnabled(renderer);
   if (was_clipped) SDL_RenderGetClipRect(renderer, &previous_clip);
-  int at = 0, drawn = 0;
-  while (at + 13 <= used && drawn < 2048) {
+  // gdi.c publishes newest runs first because pixel restoration must undo
+  // the stack backwards. Replay glyphs oldest first so overlapping text keeps
+  // its original Z order (the web renderer uses the same convention).
+  int run_offsets[HD_TEXT_SNAPSHOT_CAP / 13 + 1];
+  int at = 0, nr = 0, drawn = 0;
+  while (at < used) {
+    run_offsets[nr++] = at;
+    at += 13 + (int)data[at + 12] * 3;
+  }
+  for (int ri = nr - 1; ri >= 0 && drawn < 2048; ri--) {
+    at = run_offsets[ri];
     int count = (int)data[at + 12];
     int file = (int)data[at], rgb = (int)data[at + 2];
     float em = data[at + 1];
@@ -491,7 +500,6 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
         }
       }
     }
-    at += 13 + count * 3;
   }
   if (was_clipped) SDL_RenderSetClipRect(renderer, &previous_clip);
   else SDL_RenderSetClipRect(renderer, NULL);
@@ -510,8 +518,14 @@ static int hd_text_validate(const float *runs, int count, int *run_count, int *g
     if (!(n >= 0 && n <= (float)((count - at - 13) / 3))) return 0;
     int glyphs = (int)n;
     if ((float)glyphs != n) return 0;
+    // All coordinates are finite already. Bound them as well: lroundf and
+    // float->int conversion are undefined for out-of-range values.
+    for (int j = 0; j < 12; j++)
+      if (runs[at + j] < -1000000.0f || runs[at + j] > 1000000.0f) return 0;
     for (int j = 0; j < glyphs * 3; j++)
-      if (!isfinite(runs[at + 13 + j])) return 0;
+      if (!isfinite(runs[at + 13 + j]) ||
+          runs[at + 13 + j] < -1000000.0f || runs[at + 13 + j] > 1000000.0f)
+        return 0;
     at += 13 + glyphs * 3;
     nr++;
     ng += glyphs;
@@ -1345,6 +1359,7 @@ static DWORD WINAPI render_main(void *arg) {
   t->r = SDL_CreateRenderer(g_window, -1, flags);
   SDL_SetHint(SDL_HINT_RENDER_DRIVER, "");
   if (!t->r) t->r = SDL_CreateRenderer(g_window, -1, flags);
+  if (t->r) hd_text_glyph_cache_clear();  // invalidate textures on renderer restart
   Layer *layers[] = {&t->course[0], &t->course[1], &t->overlay, &t->ui};
   int made = 0;
   for (int i = 0; t->r && i < 4; i++) {
