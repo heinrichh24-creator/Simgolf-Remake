@@ -100,6 +100,7 @@
 #define FRAME_H HD_FRAME_H
 int hd_frame_w = 800, hd_frame_h = 600;
 void win_set_screen_size(int w, int h);   // win32.c (win32.h clashes with windows.h)
+int gdi_hd_text_snapshot(float *out, int cap);  // gdi.c, game-thread only
 int terrain_hd_seen(void);                 // terrain_hd.cpp
 enum { F_SHARP, F_INTEGER, F_NEAREST, F_SMOOTH };
 static const char *const k_filters[] = {"sharp", "integer", "nearest", "smooth"};
@@ -119,6 +120,11 @@ static double g_ui_px = 1;            // the scale in use: output px per canvas 
 static int g_active;                  // the render thread presents
 static int g_mod_on = 1;              // mods.ini hd_presentation (0: the original throughout)
 static SDL_Window *g_window;
+
+// Diagnostic metadata, paired with the published frame serial; original pixels unchanged.
+#define HD_TEXT_SNAPSHOT_CAP 32768
+static float g_frame_text[HD_TEXT_SNAPSHOT_CAP];
+static int g_frame_text_used;
 
 // Frame hand-over (game thread -> render thread).
 static CRITICAL_SECTION g_lock;
@@ -336,6 +342,8 @@ typedef struct {
   uint32_t lut[32768];
   uint16_t *local, *local_ui;   // FRAME_W x FRAME_H
   uint8_t *mask;
+  float *text_snapshot;
+  int text_snapshot_used;
   const uint8_t *cut, *cut_ui;   // hd_art_cut_mask() for the overlay and golf's UI layer
   int terrain_on;       // the terrain layer draws under the overlay
   HdBallFrame ball;   // the balls of the latest game frame (hdball_render.c)
@@ -423,6 +431,9 @@ static void upload(Rt *t, double now) {
   int was_layered = t->layered && t->course_view;
   EnterCriticalSection(&g_lock);
   memcpy(t->local, g_frame, (size_t)FRAME_W * FRAME_H * 2);
+  t->text_snapshot_used = g_frame_text_used;
+  if (t->text_snapshot && t->text_snapshot_used > 0)
+    memcpy(t->text_snapshot, g_frame_text, (size_t)t->text_snapshot_used * sizeof(float));
   t->course_view = g_frame_course;
   t->layered = g_frame_layered;
   if (t->course_view) memcpy(t->mask, g_mask, (size_t)FRAME_W * FRAME_H);
@@ -1099,6 +1110,7 @@ static DWORD WINAPI render_main(void *arg) {
   (void)arg;
   Rt *t = calloc(1, sizeof *t);
   t->local = calloc((size_t)FRAME_W * FRAME_H, 2);
+  t->text_snapshot = calloc(HD_TEXT_SNAPSHOT_CAP, sizeof(float));
   t->local_ui = calloc((size_t)FRAME_W * FRAME_H, 2);
   t->mask = calloc((size_t)FRAME_W * FRAME_H, 1);
   Uint32 flags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE | (g_cfg.vsync ? SDL_RENDERER_PRESENTVSYNC : 0);
@@ -1453,7 +1465,12 @@ int hd_present(const uint16_t *screen) {
   // title picture, which would pass for a course frame.
   int course = terrain_hd_seen() && hdt_capture(layered ? g_snap : screen, mask, g_frame_serial + 1);   // the serial this frame gets below
   if (!course) layered = 0;
+  // Serialize on the game thread, before publishing the matching pixels.
+  static float text_stage[HD_TEXT_SNAPSHOT_CAP];
+  int text_used = gdi_hd_text_snapshot(text_stage, HD_TEXT_SNAPSHOT_CAP);
   EnterCriticalSection(&g_lock);
+  g_frame_text_used = text_used;
+  if (text_used > 0) memcpy(g_frame_text, text_stage, (size_t)text_used * sizeof(float));
   memcpy(g_frame, layered ? g_snap : screen, (size_t)FRAME_W * FRAME_H * 2);
   if (layered) {
     memcpy(g_ui, screen, (size_t)FRAME_W * FRAME_H * 2);
