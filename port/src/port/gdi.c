@@ -1151,6 +1151,30 @@ int gdi_hd_text(uint16_t *frame, float *out, int cap, int (*font_ready)(int file
   return used;
 }
 
+// Opt-in diagnostic only: counts TextOutA routes without logging private text.
+// Set SIMGOLF_HD_TEXT_DIAG=1 to emit a summary every 256 calls.
+#ifndef __EMSCRIPTEN__
+static unsigned long hd_text_diag_total, hd_text_diag_pj, hd_text_diag_16, hd_text_diag_8, hd_text_diag_other;
+static void hd_text_diag_count(int route) {
+  static int enabled = -1;
+  if (enabled < 0) {
+    const char *v = getenv("SIMGOLF_HD_TEXT_DIAG");
+    enabled = v && *v && strcmp(v, "0") != 0;
+  }
+  if (!enabled) return;
+  ++hd_text_diag_total;
+  if (route == 1) ++hd_text_diag_pj;
+  else if (route == 2) ++hd_text_diag_16;
+  else if (route == 3) ++hd_text_diag_8;
+  else ++hd_text_diag_other;
+  if ((hd_text_diag_total & 255UL) == 0)
+    fprintf(stderr, "hd-text routes: total=%lu pj=%lu standard16=%lu eightbit=%lu other=%lu\\n",
+            hd_text_diag_total, hd_text_diag_pj, hd_text_diag_16, hd_text_diag_8, hd_text_diag_other);
+}
+#else
+static void hd_text_diag_count(int route) { (void)route; }
+#endif
+
 nu TextOutA(nu hdc, nu x, nu y, nu str, nu n) {
   API_TRACE();
   Dc *dc = dc_get(hdc);
@@ -1164,6 +1188,7 @@ nu TextOutA(nu hdc, nu x, nu y, nu str, nu n) {
     return 0;
   }
   const char *s = S(str);
+  if (n > 0) hd_text_diag_count(d->bpp == 16 && use_pj(f) ? 1 : d->bpp == 16 ? 2 : d->bpp == 8 ? 3 : 4);
   if (n > 0 && d->bpp == 16 && use_pj(f)) {
     text_out_pj(dc, d, f, (int32_t)x, (int32_t)y, s, (int)n);
     if (dc->is_window) win_present();
