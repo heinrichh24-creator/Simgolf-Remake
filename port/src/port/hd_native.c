@@ -394,6 +394,9 @@ typedef struct {
   int occupied;
 } HdTextGlyph;
 static HdTextGlyph g_hd_text_glyphs[HD_TEXT_GLYPH_CACHE_SLOTS];
+// Render failures must never leave subsequent frames with erased text.
+// Read on game thread, set on renderer thread (Win32 interlocked publication).
+static volatile LONG g_hd_text_replay_fault;
 static stbtt_fontinfo g_hd_text_font_info[HD_TEXT_FONT_MAX];
 static const unsigned char *g_hd_text_initialized_fonts[HD_TEXT_FONT_MAX];
 static stbtt_fontinfo *hd_text_cached_font(int file, const unsigned char *data) {
@@ -487,7 +490,11 @@ static HdTextGlyph *hd_text_glyph(SDL_Renderer *renderer, int file,
   stbtt_FreeBitmap(bitmap, NULL);
   // GPU allocation failures are transient. Do not cache a missing glyph as
   // an intentional blank; retry it on a later frame.
-  if (!slot->texture) { slot->occupied = 0; return NULL; }
+  if (!slot->texture) {
+    slot->occupied = 0;
+    InterlockedExchange(&g_hd_text_replay_fault, 1);
+    return NULL;
+  }
   slot->width = w;
   slot->height = h;
   return slot;
@@ -506,7 +513,8 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
     enabled = (v && *v && strcmp(v, "0") != 0) ||
               (replace && *replace && strcmp(replace, "0") != 0);
   }
-  if (!enabled || !data || used <= 0 || sx <= 0 || sy <= 0 || !fonts || !sizes) return;
+  if (!enabled || !data || used <= 0 || sx <= 0 || sy <= 0 || !fonts || !sizes ||
+      InterlockedCompareExchange(&g_hd_text_replay_fault, 0, 0)) return;
   int valid_runs = 0, valid_glyphs = 0;
   if (!hd_text_wire_validate(data, used, &valid_runs, &valid_glyphs)) return;
   SDL_SetRenderTarget(renderer, target);
@@ -564,7 +572,8 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
                                     (Uint8)((rgb >> 8) & 255), (Uint8)((rgb >> 16) & 255));
               SDL_Rect dst = {px + g->xoff, py + g->yoff,
                               g->width, g->height};
-              SDL_RenderCopy(renderer, g->texture, NULL, &dst);
+              if (SDL_RenderCopy(renderer, g->texture, NULL, &dst) != 0)
+                InterlockedExchange(&g_hd_text_replay_fault, 1);
               if (bold) {
                 // Match the web renderer's 1 canvas-pixel emboldening.
                 int steps = (int)ceilf(sx);
@@ -572,7 +581,8 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
                 if (steps > 16) steps = 16;
                 for (int b = 1; b <= steps; b++) {
                   dst.x++;
-                  SDL_RenderCopy(renderer, g->texture, NULL, &dst);
+                  if (SDL_RenderCopy(renderer, g->texture, NULL, &dst) != 0)
+                    InterlockedExchange(&g_hd_text_replay_fault, 1);
                 }
               }
             }
@@ -586,7 +596,8 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
                 vy + (int)lroundf(data[at + 11] * sy),
                 (int)lroundf((data[at + 10] - data[at + 9]) * sx),
                 (int)fmaxf(1.0f, roundf(sy)) };
-              if (line.w > 0) SDL_RenderFillRect(renderer, &line);
+              if (line.w > 0 && SDL_RenderFillRect(renderer, &line) != 0)
+                InterlockedExchange(&g_hd_text_replay_fault, 1);
             }
           }
         }
@@ -1800,7 +1811,8 @@ int hd_present(const uint16_t *screen) {
     g_frame_cam = g_snap_cam;
     hud_course_frame_presented();
   }
-  if (text_replace && text_used > 0) {
+  if (text_replace && text_used > 0 &&
+      !InterlockedCompareExchange(&g_hd_text_replay_fault, 0, 0)) {
     // gdi.c restores the actual pixels that lay beneath each intact original
     // TextOut. A run is erased only when its font and codepoints can be drawn.
     // Keep the original game screenshot as a fall-back for malformed runs.
