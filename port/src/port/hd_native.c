@@ -72,6 +72,7 @@
 
 #include <SDL.h>
 #include <limits.h>
+#include <stdint.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -374,6 +375,8 @@ static int SDLCALL map_mouse(void *user, SDL_Event *e) {
 // tint per run: a color change must not trigger bitmap generation or GPU upload.
 // Quantize glyph heights to quarter pixels to avoid unbounded entries on resize.
 #define HD_TEXT_GLYPH_CACHE_SLOTS 1024
+#define HD_TEXT_GLYPH_CACHE_WAYS 4
+#define HD_TEXT_GLYPH_CACHE_BUCKETS (HD_TEXT_GLYPH_CACHE_SLOTS / HD_TEXT_GLYPH_CACHE_WAYS)
 typedef struct {
   SDL_Texture *texture;
   const unsigned char *font_data;
@@ -404,9 +407,17 @@ static HdTextGlyph *hd_text_glyph(SDL_Renderer *renderer, int file,
     g_hd_text_glyph_clock = 0;
   }
   uint64_t tick = ++g_hd_text_glyph_clock;
+  // Four-way associative cache: O(4) lookup per glyph rather than scanning
+  // the entire 1024-entry atlas at 60+ presentation frames per second.
+  uint32_t hash = (uint32_t)file * 2654435761u ^
+                  (uint32_t)height_q * 2246822519u ^
+                  (uint32_t)ch * 3266489917u ^
+                  (uint32_t)xphase * 668265263u ^
+                  (uint32_t)yphase * 374761393u;
+  int base = (int)(hash & (HD_TEXT_GLYPH_CACHE_BUCKETS - 1)) * HD_TEXT_GLYPH_CACHE_WAYS;
   HdTextGlyph *slot = NULL;
-  for (int i = 0; i < HD_TEXT_GLYPH_CACHE_SLOTS; i++) {
-    HdTextGlyph *g = &g_hd_text_glyphs[i];
+  for (int i = 0; i < HD_TEXT_GLYPH_CACHE_WAYS; i++) {
+    HdTextGlyph *g = &g_hd_text_glyphs[base + i];
     if (g->occupied && g->font_data == font && g->file == file &&
         g->ch == ch && g->height_q == height_q &&
         g->xphase == xphase && g->yphase == yphase) {
