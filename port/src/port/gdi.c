@@ -1198,9 +1198,10 @@ int gdi_hd_text_snapshot(float *out, int cap) {
   int used = 0;
   for (int i = g_ntext - 1; i >= 0; i--) {
     TextRec *r = g_text[i];
-    if (r->dib != d || r->nglyph < 0 || r->nglyph > (cap - 13) / 3) continue;
+    if (r->dib != d || r->nglyph < 0) continue;
+    // Each run is indivisible. Never emit a partial record when the cap is reached.
+    if (cap - used < 13 || r->nglyph > (cap - used - 13) / 3) break;
     int need = 13 + r->nglyph * 3;
-    if (need > cap - used) break;
     float *o = out + used;
     o[0] = (float)r->file; o[1] = r->em; o[2] = (float)r->rgb;
     o[3] = (float)r->bold; o[4] = (float)r->underline;
