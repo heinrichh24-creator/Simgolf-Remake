@@ -320,13 +320,19 @@ static int SDLCALL map_mouse(void *user, SDL_Event *e) {
 // consumes it. Never trust a truncated run or an unbounded glyph count.
 static int hd_text_validate(const float *runs, int count, int *run_count, int *glyph_count) {
   int at = 0, nr = 0, ng = 0;
-  if (!runs || count < 0 || count > HD_TEXT_SNAPSHOT_CAP) return 0;
+  if (run_count) *run_count = 0;
+  if (glyph_count) *glyph_count = 0;
+  if (count < 0 || count > HD_TEXT_SNAPSHOT_CAP || (count && !runs)) return 0;
   while (at < count) {
     if (count - at < 13) return 0;
+    // Reject NaN/Inf and malformed metadata before any renderer reads it.
+    for (int j = 0; j < 13; j++) if (!isfinite(runs[at + j])) return 0;
     float n = runs[at + 12];
     if (!(n >= 0 && n <= (float)((count - at - 13) / 3))) return 0;
     int glyphs = (int)n;
     if ((float)glyphs != n) return 0;
+    for (int j = 0; j < glyphs * 3; j++)
+      if (!isfinite(runs[at + 13 + j])) return 0;
     at += 13 + glyphs * 3;
     nr++;
     ng += glyphs;
