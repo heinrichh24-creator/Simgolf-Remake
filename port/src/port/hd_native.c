@@ -474,7 +474,11 @@ static HdTextGlyph *hd_text_glyph(SDL_Renderer *renderer, int file,
   slot->yoff = yo;
   if (!bitmap || w <= 0 || h <= 0 || w > 512 || h > 512) {
     if (bitmap) stbtt_FreeBitmap(bitmap, NULL);
-    return slot;  // Empty glyph (e.g. space) is a valid cached entry.
+    // A zero-area bitmap is normal for whitespace. A failed allocation
+    // for a nonempty glyph must not permanently erase the original label.
+    if ((w > 0 && h > 0) || w > 512 || h > 512)
+      InterlockedExchange(&g_hd_text_replay_fault, 1);
+    return slot;
   }
   SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
   if (surface) {
@@ -552,6 +556,15 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
                            vy + (int)lroundf(data[at + 6] * sy),
                            (int)lroundf((data[at + 7] - data[at + 5]) * sx),
                            (int)lroundf((data[at + 8] - data[at + 6]) * sy)};
+          if (clip.w > 0 && clip.h > 0) {
+            if (was_clipped) {
+              SDL_Rect overlap;
+              if (SDL_IntersectRect(&clip, &previous_clip, &overlap))
+                clip = overlap;
+              else
+                clip.w = clip.h = 0;
+            }
+          }
           if (clip.w > 0 && clip.h > 0) {
             SDL_RenderSetClipRect(renderer, &clip);
             for (int i = 0; i < count && drawn < HD_TEXT_SNAPSHOT_CAP / HD_TEXT_WIRE_GLYPH; i++, drawn++) {
