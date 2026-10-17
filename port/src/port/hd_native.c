@@ -365,7 +365,7 @@ static void hd_text_draw_experimental(SDL_Renderer *renderer, SDL_Texture *targe
     const char *v = getenv("SIMGOLF_HD_TEXT_DRAW");
     enabled = v && *v && strcmp(v, "0") != 0;
   }
-  if (!enabled || !data || used <= 0 || sx <= 0 || sy <= 0) return;
+  if (!enabled || !data || used <= 0 || sx <= 0 || sy <= 0 || !fonts || !sizes) return;
   int valid_runs = 0;
   int valid_glyphs = 0;
   if (!hd_text_validate(data, used, &valid_runs, &valid_glyphs)) return;
@@ -1631,7 +1631,12 @@ int hd_present(const uint16_t *screen) {
   }
   static float text_stage[HD_TEXT_SNAPSHOT_CAP];
   int text_used = text_capture ? gdi_hd_text_snapshot(text_stage, HD_TEXT_SNAPSHOT_CAP) : 0;
-  if (text_used > 0) hd_text_capture_fonts(text_stage, text_used);
+  if (text_used > 0) {
+    int runs = 0, glyphs = 0;
+    if (hd_text_validate(text_stage, text_used, &runs, &glyphs))
+      hd_text_capture_fonts(text_stage, text_used);
+    else text_used = 0;  // Fail closed: never publish malformed glyph metadata.
+  }
   EnterCriticalSection(&g_lock);
   g_frame_text_used = text_used;
   if (text_used > 0) memcpy(g_frame_text, text_stage, (size_t)text_used * sizeof(float));
