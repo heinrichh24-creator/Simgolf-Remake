@@ -1,9 +1,11 @@
-name: HD text portable tests
+name: HD text checks
 on:
   push:
     branches:
       - investigation/native-hd-text-coverage
     paths:
+      - "port/src/port/gdi.c"
+      - "port/src/port/hd_native.c"
       - "port/src/port/hd_text_wire.h"
       - "port/tests/hd_text_*"
       - ".github/workflows/hd-text-portable.yml"
@@ -15,5 +17,22 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Validate native text data and TrueType geometry
+      - name: Validate text records and TrueType geometry
         run: sh port/tests/hd_text_wire_test.sh
+
+  windows-syntax:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download official SDL2 VC development headers
+        shell: pwsh
+        run: |
+          $url = "https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-devel-2.32.10-VC.zip"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\SDL2.zip"
+          Expand-Archive "$env:RUNNER_TEMP\SDL2.zip" -DestinationPath "$env:RUNNER_TEMP\SDL2"
+      - name: Type-check native renderer and GDI in x86 Windows compiler
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x86
+          clang-cl /nologo /Zs /Iport/src /Iport/third_party/stb /Iport/src/compat/msvc /I"%RUNNER_TEMP%\SDL2\SDL2-2.32.10\include" port/src/port/gdi.c port/src/port/hd_native.c
